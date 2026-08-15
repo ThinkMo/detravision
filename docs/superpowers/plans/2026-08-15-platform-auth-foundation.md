@@ -44,7 +44,7 @@
 - Produces: create_engine_from_url(url: str) -> Engine
 - Produces: create_session_factory(engine: Engine) -> sessionmaker[Session]
 - Produces: run_migrations(database_url: str) -> None
-- Produces ORM classes Camera, Person, AlarmGroup, DetectionEvent, ModelVersion, User, UserSession, SiteSettings, AuditLog
+- Produces ORM classes Camera, Person, AlarmGroup, DetectionEvent, ModelVersion, User, UserSession, SiteSettings, AuditLog; DetectionEvent retains ack_by for legacy Person references and adds nullable ack_user_id for authenticated User references
 
 - [ ] **Step 1: Write migration tests**
 
@@ -130,7 +130,7 @@ def run_migrations(database_url: str) -> None:
     command.upgrade(alembic_config(database_url), "head")
 ~~~
 
-validate_legacy_columns compares the required legacy column sets and raises RuntimeError with the table and missing columns when the structure is incompatible. Revision 0001 creates the six legacy tables for a fresh database; revision 0002 creates user, user_session, site_settings, and audit_log.
+validate_legacy_columns compares the required legacy column sets and raises RuntimeError with the table and missing columns when the structure is incompatible. Revision 0001 creates the six legacy tables for a fresh database; revision 0002 creates user, user_session, site_settings, and audit_log, then adds nullable detection_event.ack_user_id with a foreign key to user.id and an index. Use Alembic batch table alteration for SQLite compatibility.
 
 - [ ] **Step 6: Install dependencies and run migration tests**
 
@@ -505,7 +505,7 @@ Expected: FAIL because existing routes are public.
 
 - [ ] **Step 3: Apply route dependencies**
 
-All existing REST routes require current_user. POST/PATCH/DELETE for cameras, persons, alarm groups, and models require require_admin. Event PATCH accepts both roles and overwrites ack_by with the authenticated user's ID when status becomes ack.
+All existing REST routes require current_user. POST/PATCH/DELETE for cameras, persons, alarm groups, and models require require_admin. Event PATCH accepts both roles, preserves the legacy ack_by person reference, and writes the authenticated user's ID to ack_user_id when status becomes ack or closed.
 
 - [ ] **Step 4: Protect WebSockets**
 
