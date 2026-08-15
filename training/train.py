@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 
 DEFAULT_DATA = "training/configs/construction-ppe-helmet.yaml"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def cache_value(value: str) -> bool | str:
@@ -95,22 +99,94 @@ def validate_kwargs(args: argparse.Namespace, device: int | str) -> dict[str, ob
     }
 
 
-def main() -> None:
-    args = parse_args()
-    import torch
-    from ultralytics import YOLO
+def configure_runtime(project_root: Path = PROJECT_ROOT) -> None:
+    data_dir = project_root / "data"
+    matplotlib_dir = data_dir / "matplotlib"
+    matplotlib_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["YOLO_CONFIG_DIR"] = str(data_dir)
+    os.environ["MPLCONFIGDIR"] = str(matplotlib_dir)
 
-    device = args.device if args.device is not None else (0 if torch.cuda.is_available() else "cpu")
-    YOLO(args.model).train(
-        data=args.data,
-        epochs=args.epochs,
-        imgsz=args.imgsz,
-        batch=args.batch,
-        device=device,
-        workers=args.workers,
-        cache=args.cache,
-    )
 
+def required_file(value: str, label: str) -> str:
+    path = Path(value).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"{label} not found: {path}")
+    return str(path)
+
+
+def validate_local_paths(args: argparse.Namespace) -> None:
+    if args.command in {"train", "validate"}:
+        args.data = required_file(args.data, "dataset YAML")
+    if args.command in {"resume", "validate"}:
+        args.checkpoint = required_file(args.checkpoint, "checkpoint")
+
+
+def format_validation_metrics(metrics: object) -> str:
+    box = metrics.box
+    lines = [
+        "overall: "
+        f"precision={float(box.mp):.4f}, recall={float(box.mr):.4f}, "
+        f"mAP50={float(box.map50):.4f}, mAP50-95={float(box.map):.4f}"
+    ]
+    ap50 = getattr(box, "ap50", None)
+    maps = getattr(box, "maps", None)
+    if ap50 is None or maps is None:
+        return "\n".join(lines)
+    names = getattr(metrics, "names", {})
+    for class_id, (map50, map5095) in enumerate(zip(ap50, maps)):
+        name = names.get(class_id, str(class_id)) if hasattr(names, "get") else names[class_id]
+        lines.append(f"{name}: mAP50={float(map50):.4f}, mAP50-95={float(map5095):.4f}")
+    return "\n".join(lines)
+
+
+def execute(
+    args: argparse.Namespace,
+    *,
+    yolo_cls=None,
+    cuda_available=None,
+    project_root: Path = PROJECT_ROOT,
+):
+    validate_local_paths(args)
+    configure_runtime(project_root)
+    if cuda_available is None:
+        import torch
+        cuda_available = torch.cuda.is_available
+    if yolo_cls is None:
+        from ultralytics import YOLO
+        yolo_cls = YOLO
+
+    device = resolve_device(args.device, cuda_available)
+    if args.command == "train":
+        return yolo_cls(args.model).train(**train_kwargs(args, device))
+    if args.command == "resume":
+        return yolo_cls(args.checkpoint).train(**resume_kwargs(args, device))
+    metrics = yolo_cls(args.checkpoint).val(**validate_kwargs(args, device))
+    print(format_validation_metrics(metrics))
+    return metrics
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    yolo_cls=None,
+    cuda_available=None,
+    project_root: Path = PROJECT_ROOT,
+) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        execute(
+            args,
+            yolo_cls=yolo_cls,
+            cuda_available=cuda_available,
+            project_root=project_root,
+        )
+    except FileNotFoundError as exc:
+        parser.error(str(exc))
+    except Exception as exc:
+        print(f"{args.command} failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -1,3 +1,7 @@
+import os
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 
 from training.train import (
@@ -7,6 +11,36 @@ from training.train import (
     train_kwargs,
     validate_kwargs,
 )
+from training.train import configure_runtime, execute, format_validation_metrics, main
+
+
+class FakeYOLO:
+    instances = []
+
+    def __init__(self, model):
+        self.model = model
+        self.train_calls = []
+        self.val_calls = []
+        self.__class__.instances.append(self)
+
+    def train(self, **kwargs):
+        self.train_calls.append(kwargs)
+        return "trained"
+
+    def val(self, **kwargs):
+        self.val_calls.append(kwargs)
+        return SimpleNamespace(
+            names={0: "person", 1: "helmet", 2: "no_helmet"},
+            box=SimpleNamespace(
+                mp=0.65, mr=0.60, map50=0.70, map=0.36,
+                ap50=[0.81, 0.92, 0.24], maps=[0.49, 0.50, 0.09],
+            ),
+        )
+
+
+@pytest.fixture(autouse=True)
+def clear_fake_yolo_instances():
+    FakeYOLO.instances.clear()
 
 
 def test_subcommand_is_required():
@@ -79,3 +113,98 @@ def test_validate_accepts_only_validation_or_test_split():
 )
 def test_device_resolution(requested, available, expected):
     assert resolve_device(requested, lambda: available) == expected
+
+
+def test_runtime_configuration_uses_project_local_directories(tmp_path, monkeypatch):
+    monkeypatch.delenv("YOLO_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("MPLCONFIGDIR", raising=False)
+    configure_runtime(tmp_path)
+    assert os.environ["YOLO_CONFIG_DIR"] == str(tmp_path / "data")
+    assert os.environ["MPLCONFIGDIR"] == str(tmp_path / "data" / "matplotlib")
+    assert (tmp_path / "data" / "matplotlib").is_dir()
+
+
+def test_missing_training_data_fails_before_model_load(tmp_path):
+    args = parse_args(["train", "--data", str(tmp_path / "missing.yaml")])
+    with pytest.raises(FileNotFoundError, match="dataset YAML"):
+        execute(args, yolo_cls=FakeYOLO, cuda_available=lambda: False, project_root=tmp_path)
+    assert FakeYOLO.instances == []
+
+
+def test_train_dispatches_expected_arguments(tmp_path):
+    data = tmp_path / "data.yaml"
+    data.write_text("names: {0: person}", encoding="utf-8")
+    args = parse_args(["train", "--data", str(data), "--name", "formal"])
+    result = execute(args, yolo_cls=FakeYOLO, cuda_available=lambda: True, project_root=tmp_path)
+    assert result == "trained"
+    model = FakeYOLO.instances[0]
+    assert model.model == "yolo11n.pt"
+    assert model.train_calls[0]["device"] == 0
+    assert model.train_calls[0]["name"] == "formal"
+    assert Path(model.train_calls[0]["data"]).is_absolute()
+
+
+def test_resume_requires_checkpoint_and_dispatches_resume(tmp_path):
+    checkpoint = tmp_path / "last.pt"
+    checkpoint.touch()
+    args = parse_args(["resume", str(checkpoint), "--epochs", "80"])
+    execute(args, yolo_cls=FakeYOLO, cuda_available=lambda: False, project_root=tmp_path)
+    model = FakeYOLO.instances[0]
+    assert Path(model.model) == checkpoint.resolve()
+    assert model.train_calls == [{
+        "resume": True, "device": "cpu", "workers": 0,
+        "cache": False, "epochs": 80,
+    }]
+
+
+def test_validate_dispatches_and_returns_metrics(tmp_path):
+    checkpoint = tmp_path / "best.pt"
+    checkpoint.touch()
+    data = tmp_path / "data.yaml"
+    data.write_text("names: {0: person}", encoding="utf-8")
+    args = parse_args([
+        "validate", str(checkpoint), "--data", str(data), "--split", "test",
+    ])
+    metrics = execute(args, yolo_cls=FakeYOLO, cuda_available=lambda: False, project_root=tmp_path)
+    model = FakeYOLO.instances[0]
+    assert model.val_calls[0]["split"] == "test"
+    assert model.val_calls[0]["device"] == "cpu"
+    assert metrics.box.map50 == 0.70
+
+
+def test_validation_summary_contains_overall_and_per_class_metrics():
+    metrics = FakeYOLO("unused").val()
+    summary = format_validation_metrics(metrics)
+    assert "precision=0.6500" in summary
+    assert "mAP50=0.7000" in summary
+    assert "person: mAP50=0.8100, mAP50-95=0.4900" in summary
+    assert "no_helmet: mAP50=0.2400, mAP50-95=0.0900" in summary
+
+
+def test_main_uses_argparse_exit_code_for_missing_checkpoint(tmp_path):
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            ["resume", str(tmp_path / "missing.pt")],
+            yolo_cls=FakeYOLO,
+            cuda_available=lambda: False,
+            project_root=tmp_path,
+        )
+    assert exc_info.value.code == 2
+
+
+class FailingYOLO(FakeYOLO):
+    def train(self, **kwargs):
+        raise RuntimeError("CUDA failed")
+
+
+def test_main_reports_runtime_failure(tmp_path, capsys):
+    data = tmp_path / "data.yaml"
+    data.write_text("names: {0: person}", encoding="utf-8")
+    code = main(
+        ["train", "--data", str(data)],
+        yolo_cls=FailingYOLO,
+        cuda_available=lambda: True,
+        project_root=tmp_path,
+    )
+    assert code == 1
+    assert "train failed: CUDA failed" in capsys.readouterr().err
