@@ -22,9 +22,9 @@ def cache_value(value: str) -> bool | str:
 
 def add_device_options(parser: argparse.ArgumentParser, *, include_cache: bool) -> None:
     parser.add_argument("--device", default="auto", help="auto, cpu, 0, 0,1, etc.")
-    parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--workers", type=int, default=0, help="data-loading worker count")
     if include_cache:
-        parser.add_argument("--cache", type=cache_value, default=False)
+        parser.add_argument("--cache", type=cache_value, default=False, help="false, ram, or disk")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,28 +34,28 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     train = subparsers.add_parser("train", help="start a new training run")
-    train.add_argument("--data", default=DEFAULT_DATA)
-    train.add_argument("--model", default="yolo11n.pt")
-    train.add_argument("--epochs", type=int, default=50)
-    train.add_argument("--imgsz", type=int, default=512)
-    train.add_argument("--batch", type=int, default=4)
-    train.add_argument("--project", default="runs/detect")
-    train.add_argument("--name")
-    train.add_argument("--patience", type=int, default=100)
-    train.add_argument("--seed", type=int, default=0)
+    train.add_argument("--data", default=DEFAULT_DATA, help="dataset YAML path")
+    train.add_argument("--model", default="yolo11n.pt", help="model checkpoint or YAML")
+    train.add_argument("--epochs", type=int, default=50, help="training epoch count")
+    train.add_argument("--imgsz", type=int, default=512, help="square input image size")
+    train.add_argument("--batch", type=int, default=4, help="images per batch")
+    train.add_argument("--project", default="runs/detect", help="base output directory")
+    train.add_argument("--name", help="optional run directory name")
+    train.add_argument("--patience", type=int, default=100, help="early-stopping patience")
+    train.add_argument("--seed", type=int, default=0, help="random seed")
     add_device_options(train, include_cache=True)
 
     resume = subparsers.add_parser("resume", help="resume from a last.pt checkpoint")
-    resume.add_argument("checkpoint")
-    resume.add_argument("--epochs", type=int)
+    resume.add_argument("checkpoint", help="last.pt checkpoint to resume")
+    resume.add_argument("--epochs", type=int, help="new total epoch target")
     add_device_options(resume, include_cache=True)
 
     validate = subparsers.add_parser("validate", help="evaluate a checkpoint")
-    validate.add_argument("checkpoint")
-    validate.add_argument("--data", default=DEFAULT_DATA)
-    validate.add_argument("--split", choices=("val", "test"), default="val")
-    validate.add_argument("--imgsz", type=int, default=512)
-    validate.add_argument("--batch", type=int, default=4)
+    validate.add_argument("checkpoint", help="checkpoint to evaluate")
+    validate.add_argument("--data", default=DEFAULT_DATA, help="dataset YAML path")
+    validate.add_argument("--split", choices=("val", "test"), default="val", help="dataset split to evaluate")
+    validate.add_argument("--imgsz", type=int, default=512, help="square input image size")
+    validate.add_argument("--batch", type=int, default=4, help="images per batch")
     add_device_options(validate, include_cache=False)
     return parser
 
@@ -130,10 +130,16 @@ def format_validation_metrics(metrics: object) -> str:
     ]
     ap50 = getattr(box, "ap50", None)
     maps = getattr(box, "maps", None)
-    if ap50 is None or maps is None:
+    ap = getattr(box, "ap", None)
+    if ap50 is None or (maps is None and ap is None):
         return "\n".join(lines)
     names = getattr(metrics, "names", {})
-    for class_id, (map50, map5095) in enumerate(zip(ap50, maps)):
+    class_ids = getattr(box, "ap_class_index", None)
+    if class_ids is None:
+        class_ids = range(len(ap50))
+    for result_index, (class_id, map50) in enumerate(zip(class_ids, ap50)):
+        class_id = int(class_id)
+        map5095 = maps[class_id] if maps is not None else ap[result_index]
         name = names.get(class_id, str(class_id)) if hasattr(names, "get") else names[class_id]
         lines.append(f"{name}: mAP50={float(map50):.4f}, mAP50-95={float(map5095):.4f}")
     return "\n".join(lines)

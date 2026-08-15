@@ -148,6 +148,12 @@ names:
   --data training/configs/construction-ppe-helmet.yaml --split test --device 0
 ```
 
+Standalone validation creates an auto-incremented output directory selected by
+Ultralytics, such as `runs/detect/val`, `runs/detect/val2`, or
+`runs/detect/val-3`. The console prints a compact overall and per-class metric
+summary; the selected validation directory contains plots and other validation
+artifacts. Do not assume a fixed suffix.
+
 省略 `--device` 时，如果 CUDA 可用则选择 GPU `0`，否则使用 CPU。默认值仍为 `workers=0` 和 `cache=false`，以规避 Windows 上已观察到的 page-file / multiprocessing failure。
 
 | Need | Option or file | Guidance |
@@ -178,14 +184,17 @@ python -m training.train train --model yolo11n.pt --epochs 80 --imgsz 640
 CPU 部署导出 FP32 ONNX：
 
 ```bash
-python -m training.export runs/detect/train/weights/best.pt --target cpu --data-version v1
+python -m training.export runs/detect/train-3/weights/best.pt --target cpu --data-version v1
 ```
 
 NVIDIA GPU 部署导出 FP16 TensorRT：
 
 ```bash
-python -m training.export runs/detect/train/weights/best.pt --target gpu --data-version v1
+python -m training.export runs/detect/train-3/weights/best.pt --target gpu --data-version v1
 ```
+
+Substitute your actual training run directory when it differs from
+`runs/detect/train-3`.
 
 导出产物写入 `model_repo/`。通过 `POST /api/models` 登记，再调用 `POST /api/models/{id}/activate` 激活；运行时会在下一次收敛时加载新模型，失败则保留旧检测器。
 

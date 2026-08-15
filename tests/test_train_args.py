@@ -196,6 +196,27 @@ def test_validation_summary_contains_overall_and_per_class_metrics():
     assert "no_helmet: mAP50=0.2400, mAP50-95=0.0900" in summary
 
 
+def test_validation_summary_maps_sparse_class_metrics_to_configured_class_ids():
+    metrics = SimpleNamespace(
+        names={0: "person", 1: "helmet", 2: "no_helmet"},
+        box=SimpleNamespace(
+            mp=0.65,
+            mr=0.60,
+            map50=0.70,
+            map=0.36,
+            ap_class_index=[1, 2],
+            ap50=[0.92, 0.24],
+            maps=[0.36, 0.50, 0.09],
+        ),
+    )
+
+    summary = format_validation_metrics(metrics)
+
+    assert "helmet: mAP50=0.9200, mAP50-95=0.5000" in summary
+    assert "no_helmet: mAP50=0.2400, mAP50-95=0.0900" in summary
+    assert "person:" not in summary
+
+
 def test_main_uses_argparse_exit_code_for_missing_checkpoint(tmp_path):
     with pytest.raises(SystemExit) as exc_info:
         main(
