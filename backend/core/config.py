@@ -13,7 +13,12 @@ def _bool_env(name: str, default: bool) -> bool:
 @dataclass(frozen=True, slots=True)
 class Settings:
     app_name: str = os.getenv("APP_NAME", "Safety Detect")
-    database_path: Path = Path(os.getenv("DATABASE_PATH", "data/safety_detect.db"))
+    environment: str = os.getenv("APP_ENV", "development")
+    database_url: str = os.getenv("DATABASE_URL", "sqlite:///data/safety_detect.db")
+    session_ttl_hours: int = int(os.getenv("SESSION_TTL_HOURS", "12"))
+    admin_initial_password: str | None = os.getenv("ADMIN_INITIAL_PASSWORD")
+    upload_dir: Path = Path(os.getenv("UPLOAD_DIR", "data/uploads"))
+    cookie_secure: bool = _bool_env("COOKIE_SECURE", False)
     snapshot_dir: Path = Path(os.getenv("SNAPSHOT_DIR", "data/snapshots"))
     model_path: str | None = os.getenv("MODEL_PATH")
     worker_count: int = int(os.getenv("WORKER_COUNT", "1"))
@@ -21,6 +26,13 @@ class Settings:
     reconcile_interval: float = float(os.getenv("RECONCILE_INTERVAL", "3"))
     enable_runtime: bool = _bool_env("ENABLE_RUNTIME", True)
     feishu_webhook: str | None = os.getenv("FEISHU_WEBHOOK")
+
+    @property
+    def database_path(self) -> Path:
+        """Compatibility adapter for callers that still require a SQLite path."""
+        if self.database_url.startswith("sqlite:///"):
+            return Path(self.database_url.removeprefix("sqlite:///"))
+        return Path(os.getenv("DATABASE_PATH", "data/safety_detect.db"))
 
 
 settings = Settings()
