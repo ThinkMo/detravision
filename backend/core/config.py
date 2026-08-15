@@ -1,0 +1,26 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    return default if value is None else value.lower() in {"1", "true", "yes", "on"}
+
+
+@dataclass(frozen=True, slots=True)
+class Settings:
+    app_name: str = os.getenv("APP_NAME", "Safety Detect")
+    database_path: Path = Path(os.getenv("DATABASE_PATH", "data/safety_detect.db"))
+    snapshot_dir: Path = Path(os.getenv("SNAPSHOT_DIR", "data/snapshots"))
+    model_path: str | None = os.getenv("MODEL_PATH")
+    worker_count: int = int(os.getenv("WORKER_COUNT", "1"))
+    queue_size: int = int(os.getenv("FRAME_QUEUE_SIZE", "8"))
+    reconcile_interval: float = float(os.getenv("RECONCILE_INTERVAL", "3"))
+    enable_runtime: bool = _bool_env("ENABLE_RUNTIME", True)
+    feishu_webhook: str | None = os.getenv("FEISHU_WEBHOOK")
+
+
+settings = Settings()

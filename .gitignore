@@ -1,0 +1,15 @@
+__pycache__/
+.pytest_cache/
+.venv/
+.worktrees/
+.superpowers/
+data/
+datasets/
+*.pt
+*.onnx
+*.engine
+model_repo/*.pt
+model_repo/*.onnx
+model_repo/*.engine
+runs/
+.env
