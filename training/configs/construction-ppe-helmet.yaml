@@ -1,6 +1,6 @@
 # Derived from Ultralytics Construction-PPE Dataset v1.0.0 (AGPL-3.0).
 # Source: https://docs.ultralytics.com/datasets/detect/construction-ppe/
-path: construction-ppe-helmet
+path: datasets/construction-ppe-helmet
 train: images/train
 val: images/val
 test: images/test

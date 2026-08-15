@@ -124,6 +124,21 @@ def test_runtime_configuration_uses_project_local_directories(tmp_path, monkeypa
     assert (tmp_path / "data" / "matplotlib").is_dir()
 
 
+def test_helmet_dataset_yaml_resolves_test_images_from_project_datasets_root(tmp_path, monkeypatch):
+    expected_test_path = tmp_path / "datasets" / "construction-ppe-helmet" / "images" / "test"
+    for split in ("train", "val", "test"):
+        (tmp_path / "datasets" / "construction-ppe-helmet" / "images" / split).mkdir(parents=True)
+
+    monkeypatch.setenv("YOLO_CONFIG_DIR", str(tmp_path / "ultralytics"))
+    monkeypatch.chdir(tmp_path)
+    from ultralytics.data.utils import check_det_dataset
+
+    yaml_path = Path(__file__).parents[1] / "training" / "configs" / "construction-ppe-helmet.yaml"
+    dataset = check_det_dataset(str(yaml_path), autodownload=False, split="test")
+
+    assert Path(dataset["test"]) == expected_test_path
+
+
 def test_missing_training_data_fails_before_model_load(tmp_path):
     args = parse_args(["train", "--data", str(tmp_path / "missing.yaml")])
     with pytest.raises(FileNotFoundError, match="dataset YAML"):
