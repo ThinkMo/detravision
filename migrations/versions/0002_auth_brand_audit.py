@@ -20,16 +20,16 @@ def upgrade() -> None:
         sa.CheckConstraint("role IN ('admin', 'user')", name="role"),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("1")),
         sa.Column("must_change_password", sa.Boolean(), nullable=False, server_default=sa.text("0")),
-        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
-        sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
     )
     op.create_table(
         "user_session",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("user_id", sa.Integer(), sa.ForeignKey("user.id", ondelete="CASCADE"), nullable=False),
         sa.Column("token_digest", sa.String(length=64), nullable=False, unique=True),
-        sa.Column("expires_at", sa.DateTime(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
     )
     op.create_index("ix_user_session_user_id", "user_session", ["user_id"])
     op.create_table(
@@ -37,7 +37,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("site_name", sa.String(length=200), nullable=False, server_default=sa.text("'Safety Detect'")),
         sa.Column("logo_key", sa.Text()),
-        sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
     )
     op.create_table(
         "audit_log",
@@ -49,7 +49,7 @@ def upgrade() -> None:
         sa.Column("outcome", sa.String(length=40), nullable=False),
         sa.Column("details", sa.Text()),
         sa.Column("ip", sa.String(length=64)),
-        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
     )
     op.create_index("ix_audit_log_actor_id", "audit_log", ["actor_id"])
     with op.batch_alter_table("detection_event") as batch_op:

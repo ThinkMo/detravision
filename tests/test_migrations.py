@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from datetime import datetime, timedelta, timezone
+from io import StringIO
 
 import pytest
+from alembic import command
 from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy.dialects import mysql, sqlite
+from sqlalchemy.engine import make_url
 
-from backend.db.migrate import run_migrations
-from backend.db.models import Camera
+from backend.db.migrate import alembic_config, run_migrations
+from backend.db.models import Camera, DetectionEvent, UserSession
 from backend.db.session import create_engine_from_url, create_session_factory
 
 
@@ -111,6 +116,55 @@ def test_incompatible_legacy_schema_is_rejected_before_stamping(tmp_path):
 
     with pytest.raises(RuntimeError, match=r"camera.*rtsp_url"):
         run_migrations("sqlite:///" + path.as_posix())
+
+
+def test_mysql_baseline_sql_uses_defaultable_column_types():
+    """Catches baseline defaults on MySQL TEXT columns, which prevent fresh upgrades."""
+    output = StringIO()
+    config = alembic_config("mysql+pymysql://safety:safety@127.0.0.1/safety_test?charset=utf8mb4")
+    config.output_buffer = output
+
+    command.upgrade(config, "0001", sql=True)
+
+    sql = output.getvalue()
+    assert "VARCHAR(8192) NOT NULL DEFAULT '[]'" in sql
+    assert "VARCHAR(4096) NOT NULL DEFAULT '[\"no_helmet\",\"fire\",\"smoke\"]'" in sql
+    assert "TEXT NOT NULL DEFAULT" not in sql
+
+
+def test_timestamp_columns_normalize_aware_values_and_reject_naive_values():
+    """Catches accepting local/ambiguous datetimes for stored session expiry data."""
+    processor = UserSession.__table__.c.expires_at.type.bind_processor(sqlite.dialect())
+    assert processor is not None
+    east_eight = timezone(timedelta(hours=8))
+
+    assert processor(datetime(2030, 1, 2, 9, 4, 5, tzinfo=east_eight)) == datetime(2030, 1, 2, 1, 4, 5)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        processor(datetime(2030, 1, 2, 1, 4, 5))
+
+
+def test_mysql_engine_initializes_connections_in_utc():
+    """Catches a MySQL engine configuration that leaves CURRENT_TIMESTAMP session-local."""
+    engine = create_engine_from_url("mysql+pymysql://safety:safety@127.0.0.1/safety_test?charset=utf8mb4")
+    try:
+        _, keyword_arguments = engine.dialect.create_connect_args(engine.url)
+        assert keyword_arguments["init_command"] == "SET time_zone = '+00:00'"
+    finally:
+        engine.dispose()
+
+
+def test_mysql_migration_connections_initialize_in_utc():
+    """Catches Alembic bypassing the engine helper for MySQL timestamp defaults."""
+    config = alembic_config("mysql+pymysql://safety:safety@127.0.0.1/safety_test?charset=utf8mb4")
+
+    _, keyword_arguments = mysql.dialect().create_connect_args(make_url(config.get_main_option("sqlalchemy.url")))
+    assert keyword_arguments["init_command"] == "SET time_zone = '+00:00'"
+
+
+def test_detection_event_metadata_retains_legacy_composite_index():
+    """Catches metadata drift that would make Alembic remove the legacy event query index."""
+    index_columns = {tuple(column.name for column in index.columns) for index in DetectionEvent.__table__.indexes}
+    assert ("camera_id", "created_at") in index_columns
 
 
 @pytest.mark.mysql

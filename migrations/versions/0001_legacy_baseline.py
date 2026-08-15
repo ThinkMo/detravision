@@ -18,10 +18,10 @@ def upgrade() -> None:
         sa.Column("rtsp_url", sa.Text(), nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("0")),
         sa.Column("sample_fps", sa.Float(), nullable=False, server_default=sa.text("1.0")),
-        sa.Column("roi", sa.Text(), nullable=False, server_default=sa.text("'[]'")),
-        sa.Column("detect_classes", sa.Text(), nullable=False, server_default=sa.text("'[\"no_helmet\",\"fire\",\"smoke\"]'")),
+        sa.Column("roi", sa.String(length=8192), nullable=False, server_default=sa.text("'[]'")),
+        sa.Column("detect_classes", sa.String(length=4096), nullable=False, server_default=sa.text("'[\"no_helmet\",\"fire\",\"smoke\"]'")),
         sa.Column("alarm_group_id", sa.Integer()),
-        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
     )
     op.create_table(
         "person",
@@ -30,13 +30,13 @@ def upgrade() -> None:
         sa.Column("phone", sa.Text()),
         sa.Column("feishu_id", sa.Text()),
         sa.Column("dept", sa.Text()),
-        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
     )
     op.create_table(
         "alarm_group",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("name", sa.Text(), nullable=False, unique=True),
-        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
     )
     op.create_table(
         "alarm_group_member",
@@ -52,10 +52,10 @@ def upgrade() -> None:
         sa.Column("confidence", sa.Float(), nullable=False),
         sa.Column("bbox", sa.Text(), nullable=False),
         sa.Column("snapshot_path", sa.Text()),
-        sa.Column("status", sa.Text(), nullable=False, server_default=sa.text("'new'")),
+        sa.Column("status", sa.String(length=20), nullable=False, server_default=sa.text("'new'")),
         sa.CheckConstraint("status IN ('new','ack','closed')", name="status"),
         sa.Column("ack_by", sa.Integer(), sa.ForeignKey("person.id")),
-        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
     )
     op.create_index("ix_event_camera_created", "detection_event", ["camera_id", "created_at"])
     op.create_table(
@@ -63,11 +63,11 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("name", sa.Text(), nullable=False),
         sa.Column("file_path", sa.Text(), nullable=False),
-        sa.Column("runtime", sa.Text(), nullable=False, server_default=sa.text("'onnx-fp32'")),
+        sa.Column("runtime", sa.String(length=64), nullable=False, server_default=sa.text("'onnx-fp32'")),
         sa.Column("classes", sa.Text(), nullable=False),
         sa.Column("map50", sa.Float()),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("0")),
-        sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
     )
 
 

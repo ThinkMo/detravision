@@ -35,7 +35,10 @@ def alembic_config(database_url: str) -> Config:
     root = Path(__file__).resolve().parents[2]
     config = Config(str(root / "alembic.ini"))
     config.set_main_option("script_location", str(root / "migrations"))
-    config.set_main_option("sqlalchemy.url", database_url)
+    parsed_url = make_url(database_url)
+    if parsed_url.get_backend_name() == "mysql":
+        database_url = str(parsed_url.update_query_dict({"init_command": "SET time_zone = '+00:00'"}))
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     return config
 
 
