@@ -156,16 +156,18 @@ names:
 | Force CPU | `--device cpu` | Correct but much slower |
 | Faster repeated reads | `--cache disk` | Prefer disk over RAM on this Windows host |
 | Label a run | `--name helmet-v2` | Creates a recognizable run directory |
-| Deploy/evaluate best quality | `weights/best.pt` | Best validation score during training |
-| Recover exact run state | `weights/last.pt` | Optimizer and final epoch state for resume |
-| Review curves | `results.csv`, `results.png` | Per-epoch losses and validation metrics |
-| Review errors | `confusion_matrix.png`, `val_batch*_pred.jpg` | Class confusion and prediction examples |
+| Deploy/evaluate best quality | `runs/detect/train-3/weights/best.pt` | Best validation score during training |
+| Recover exact run state | `runs/detect/train-3/weights/last.pt` | Optimizer and final epoch state for resume |
+| Review curves | `runs/detect/train-3/results.csv`, `runs/detect/train-3/results.png` | Per-epoch losses and validation metrics |
+| Review errors | `runs/detect/train-3/confusion_matrix.png`, `runs/detect/train-3/val_batch*_pred.jpg` | Class confusion and prediction examples |
+
+These artifacts live inside the individual run directory (for example, `runs/detect/train-3/`); checkpoint weights are under its `weights/` subdirectory.
 
 故障排查：
 
 - `WinError 1455`：保持 `--workers 0 --cache false`，关闭孤立的 Python 进程；如果系统仍受内存限制，增大 Windows page file。
 - CUDA out of memory：先降低 `--batch`，再降低 `--imgsz`；不要把 RAM cache 当作 GPU 显存修复方案。
-- CUDA unavailable：运行现有环境检查；在修正 PyTorch/CUDA 安装前使用 `--device cpu`。
+- CUDA unavailable：运行 `.\.venv\Scripts\python.exe -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda)"` 检查 PyTorch/CUDA；在修正安装前使用 `--device cpu`。
 
 自动选择 CPU/GPU 训练（请使用上面的 `train` 子命令）：
 
