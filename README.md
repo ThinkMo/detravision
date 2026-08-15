@@ -57,8 +57,11 @@ backend/
 ├── ws/hub.py              # WebSocket 广播
 └── main.py                # FastAPI 入口
 training/
-├── configs/safety.yaml
-├── train.py
+├── configs/
+│  ├── construction-ppe-helmet.yaml
+│  └── safety.yaml
+├── prepare_construction_ppe.py
+├── train.py                 # train / resume / validate
 └── export.py
 deploy/                    # Dockerfile 与 Compose
 tests/                     # 数据库、队列、规则测试
@@ -125,12 +128,49 @@ names:
   4: smoke
 ```
 
-安全帽数据应包含完整人员框以及头部 `helmet` / `no_helmet` 框。烟火公开数据泛化有限，必须补充目标现场在不同光照、距离下的实拍，并加入反光、水汽、焊接等困难负样本。
+当前 Construction-PPE 模型的类别为 `person`、`helmet`、`no_helmet`；未来合并的 safety 模型才会使用 `fire`、`smoke`。安全帽数据应包含完整人员框以及头部 `helmet` / `no_helmet` 框。烟火公开数据泛化有限，必须补充目标现场在不同光照、距离下的实拍，并加入反光、水汽、焊接等困难负样本。
 
-自动选择 CPU/GPU 训练：
+以下命令必须在 `D:\free` 仓库根目录执行，并且已安装虚拟环境：
+
+```powershell
+# Start a new 50-epoch run
+.\.venv\Scripts\python.exe -m training.train train `
+  --data training/configs/construction-ppe-helmet.yaml `
+  --model yolo11n.pt --epochs 50 --imgsz 512 --batch 4 --device 0
+
+# Resume an interrupted run; --epochs is the new total target
+.\.venv\Scripts\python.exe -m training.train resume `
+  runs/detect/train-3/weights/last.pt --epochs 80 --device 0
+
+# Evaluate best.pt on the held-out test split
+.\.venv\Scripts\python.exe -m training.train validate `
+  runs/detect/train-3/weights/best.pt `
+  --data training/configs/construction-ppe-helmet.yaml --split test --device 0
+```
+
+省略 `--device` 时，如果 CUDA 可用则选择 GPU `0`，否则使用 CPU。默认值仍为 `workers=0` 和 `cache=false`，以规避 Windows 上已观察到的 page-file / multiprocessing failure。
+
+| Need | Option or file | Guidance |
+| --- | --- | --- |
+| Smaller GPU memory use | `--batch 2` or `--batch 1` | Lower batch before lowering image size |
+| Force CPU | `--device cpu` | Correct but much slower |
+| Faster repeated reads | `--cache disk` | Prefer disk over RAM on this Windows host |
+| Label a run | `--name helmet-v2` | Creates a recognizable run directory |
+| Deploy/evaluate best quality | `weights/best.pt` | Best validation score during training |
+| Recover exact run state | `weights/last.pt` | Optimizer and final epoch state for resume |
+| Review curves | `results.csv`, `results.png` | Per-epoch losses and validation metrics |
+| Review errors | `confusion_matrix.png`, `val_batch*_pred.jpg` | Class confusion and prediction examples |
+
+故障排查：
+
+- `WinError 1455`：保持 `--workers 0 --cache false`，关闭孤立的 Python 进程；如果系统仍受内存限制，增大 Windows page file。
+- CUDA out of memory：先降低 `--batch`，再降低 `--imgsz`；不要把 RAM cache 当作 GPU 显存修复方案。
+- CUDA unavailable：运行现有环境检查；在修正 PyTorch/CUDA 安装前使用 `--device cpu`。
+
+自动选择 CPU/GPU 训练（请使用上面的 `train` 子命令）：
 
 ```bash
-python -m training.train --model yolo11n.pt --epochs 80 --imgsz 640
+python -m training.train train --model yolo11n.pt --epochs 80 --imgsz 640
 ```
 
 CPU 部署导出 FP32 ONNX：
