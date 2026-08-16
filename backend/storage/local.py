@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import tempfile
-from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import BinaryIO
@@ -84,19 +83,3 @@ class LocalFileStorage(FileStorage):
 
     def delete(self, key: str) -> None:
         self._path(key).unlink(missing_ok=True)
-
-    def iter_keys(self, namespace: str) -> Iterable[str]:
-        namespace_parts = self._parts(namespace, label="namespace")
-        namespace_path = self.root.joinpath(*namespace_parts).resolve()
-        try:
-            namespace_path.relative_to(self.root)
-        except ValueError as exc:
-            raise ValueError("namespace escapes configured root") from exc
-        if not namespace_path.exists():
-            return
-        for candidate in namespace_path.rglob("*"):
-            if not candidate.is_file():
-                continue
-            key = candidate.relative_to(self.root).as_posix()
-            self._path(key)
-            yield key

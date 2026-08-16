@@ -291,6 +291,9 @@ def test_replacing_logo_removes_old_file_only_after_new_setting_commits(site_app
     assert first_key != second_key
     assert first_key is not None and not (upload_dir / Path(first_key)).exists()
     assert second_key is not None and (upload_dir / Path(second_key)).is_file()
+    LogoCleanupQueue = load_component("backend.db.models", "LogoCleanupQueue")
+    with session_factory() as session:
+        assert session.scalars(select(LogoCleanupQueue)).all() == []
 
 
 @pytest.mark.parametrize(
@@ -419,7 +422,7 @@ def test_storage_write_failure_returns_stable_503_without_path_leak(
     assert storage_records[0].exc_info is None
 
 
-def test_failed_old_logo_delete_is_discoverable_and_retryable_after_restart(
+def test_failed_old_logo_delete_is_queued_and_retried_exactly_after_restart(
     site_app,
     monkeypatch,
     caplog,
@@ -465,12 +468,120 @@ def test_failed_old_logo_delete_is_discoverable_and_retryable_after_restart(
     assert "error_type=OSError" in cleanup_records[0].getMessage()
     assert cleanup_records[0].exc_info is None
 
-    # A new service instance has no in-memory knowledge of first_key. Recovery
-    # therefore proves the cleanup mechanism can discover persisted orphans.
+    LogoCleanupQueue = load_component("backend.db.models", "LogoCleanupQueue")
+    with session_factory() as session:
+        pending = session.scalars(select(LogoCleanupQueue)).all()
+        assert [row.logo_key for row in pending] == [first_key]
+
+    # These files share the Logo namespace but were never explicitly queued.
+    # Cleanup must not infer that they are safe to remove.
+    uncommitted_key = storage.save(io.BytesIO(image_bytes()), "site-logo", "png")
+    readme = upload_dir / "site-logo" / "README.md"
+    temporary = upload_dir / "site-logo" / ".upload-pending.tmp"
+    readme.write_text("keep", encoding="utf-8")
+    temporary.write_bytes(b"in progress")
+
+    # A new service instance has no in-memory knowledge of first_key. The DB
+    # queue must be the only source of keys eligible for recovery.
     service_type = type(api_app.state.brand_service)
     restarted_service = service_type(session_factory, storage)
-    assert restarted_service.cleanup_orphaned_logos() == 1
+    assert restarted_service.cleanup_pending_logos() == 1
     assert not (upload_dir / Path(first_key)).exists()
+    assert (upload_dir / Path(uncommitted_key)).is_file()
+    assert readme.read_text(encoding="utf-8") == "keep"
+    assert temporary.read_bytes() == b"in progress"
+    with session_factory() as session:
+        assert session.scalars(select(LogoCleanupQueue)).all() == []
+
+
+def test_pending_cleanup_never_scans_unqueued_logo_namespace_files(site_app):
+    """Catches cleanup treating every non-current namespace file as disposable."""
+    api_app, _, _, upload_dir = site_app
+    storage = api_app.state.file_storage
+    uncommitted_key = storage.save(io.BytesIO(image_bytes()), "site-logo", "png")
+    readme = upload_dir / "site-logo" / "README.md"
+    temporary = upload_dir / "site-logo" / ".upload-active.tmp"
+    readme.write_text("keep", encoding="utf-8")
+    temporary.write_bytes(b"active")
+
+    assert api_app.state.brand_service.cleanup_pending_logos() == 0
+    assert (upload_dir / Path(uncommitted_key)).is_file()
+    assert readme.read_text(encoding="utf-8") == "keep"
+    assert temporary.read_bytes() == b"active"
+
+
+def test_cleanup_rechecks_database_and_keeps_a_key_made_current_by_another_instance(
+    site_app,
+):
+    """Catches a stale cleanup instance deleting a key after another instance makes it current."""
+    api_app, _, session_factory, upload_dir = site_app
+    storage = api_app.state.file_storage
+    LogoCleanupQueue = load_component("backend.db.models", "LogoCleanupQueue")
+    queued_key = storage.save(io.BytesIO(image_bytes()), "site-logo", "png")
+    with session_factory.begin() as session:
+        session.add(LogoCleanupQueue(logo_key=queued_key))
+
+    service_type = type(api_app.state.brand_service)
+    stale_service = service_type(session_factory, storage)
+
+    # Simulate a second process switching the pointer after the cleanup service
+    # was constructed but before it starts the deletion attempt.
+    with session_factory.begin() as session:
+        row = session.get(SiteSettings, 1)
+        if row is None:
+            row = SiteSettings(id=1, site_name="Safety Detect")
+            session.add(row)
+        row.logo_key = queued_key
+
+    assert stale_service.cleanup_pending_logos() == 0
+    assert (upload_dir / Path(queued_key)).is_file()
+    with session_factory() as session:
+        pending = session.scalars(select(LogoCleanupQueue)).all()
+        assert [row.logo_key for row in pending] == [queued_key]
+
+
+def test_queue_insert_failure_rolls_back_pointer_and_removes_uncommitted_new_logo(
+    site_app,
+):
+    """Catches the Logo pointer committing without its exact old-key cleanup record."""
+    api_app, _, session_factory, upload_dir = site_app
+    LogoCleanupQueue = load_component("backend.db.models", "LogoCleanupQueue")
+    with client_for(site_app, "admin") as client:
+        assert client.post(
+            "/api/settings/site/logo",
+            files={"file": ("first.png", image_bytes(), "image/png")},
+        ).status_code == 200
+        with session_factory() as session:
+            old_key = session.get(SiteSettings, 1).logo_key
+        before = stored_files(upload_dir)
+
+        engine = session_factory.kw["bind"]
+
+        def fail_queue_insert(
+            _connection,
+            _cursor,
+            statement,
+            parameters,
+            _context,
+            _executemany,
+        ) -> None:
+            if "insert into logo_cleanup_queue" in " ".join(statement.casefold().split()):
+                raise OperationalError(statement, parameters, RuntimeError("database offline"))
+
+        event.listen(engine, "before_cursor_execute", fail_queue_insert)
+        try:
+            response = client.post(
+                "/api/settings/site/logo",
+                files={"file": ("second.png", image_bytes(), "image/png")},
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", fail_queue_insert)
+
+    assert response.status_code == 503
+    assert stored_files(upload_dir) == before
+    with session_factory() as session:
+        assert session.get(SiteSettings, 1).logo_key == old_key
+        assert session.scalars(select(LogoCleanupQueue)).all() == []
 
 
 def test_brand_changes_are_audited_without_storage_keys(site_app):

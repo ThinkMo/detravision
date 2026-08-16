@@ -116,6 +116,16 @@ class SiteSettings(Base):
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP"))
 
 
+class LogoCleanupQueue(Base):
+    __tablename__ = "logo_cleanup_queue"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    logo_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 

@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
     file_storage = LocalFileStorage(settings.upload_dir)
     brand_service = BrandService(session_factory, file_storage)
     auth_service.bootstrap_admin()
-    brand_service.cleanup_orphaned_logos()
+    brand_service.cleanup_pending_logos()
     hub = EventHub()
     runtime = RuntimeManager(settings, repository, build_detector(settings.model_path), hub)
     app.state.repository = repository

@@ -97,7 +97,13 @@ def test_fresh_sqlite_upgrade_creates_all_tables(tmp_path):
 
     names = set(inspect(create_engine(url)).get_table_names())
     assert {"camera", "person", "alarm_group", "detection_event", "model_version"} <= names
-    assert {"user", "user_session", "site_settings", "audit_log"} <= names
+    assert {
+        "user",
+        "user_session",
+        "site_settings",
+        "audit_log",
+        "logo_cleanup_queue",
+    } <= names
 
 
 def test_legacy_sqlite_is_stamped_then_upgraded(legacy_database_url):
@@ -105,7 +111,7 @@ def test_legacy_sqlite_is_stamped_then_upgraded(legacy_database_url):
     run_migrations(legacy_database_url)
 
     with create_engine(legacy_database_url).connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0002"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0003"
         event_columns = {column["name"] for column in inspect(connection).get_columns("detection_event")}
     assert {"ack_by", "ack_user_id"} <= event_columns
 
