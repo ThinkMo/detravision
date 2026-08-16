@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
@@ -21,9 +22,12 @@ from backend.db.session import create_engine_from_url, create_session_factory
 from backend.engine import build_detector
 from backend.pipeline import RuntimeManager
 from backend.storage import LocalFileStorage
+from backend.web import mount_frontend
 from backend.ws import EventHub
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+
+FRONTEND_DIST_DIR = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 
 
 def application_lifespan(app_settings: Settings):
@@ -123,6 +127,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     application.include_router(site_router)
     application.add_api_websocket_route("/ws/events", event_stream)
     application.add_api_websocket_route("/ws/live/{camera_id}", live_stream)
+    mount_frontend(application, FRONTEND_DIST_DIR)
     return application
 
 
