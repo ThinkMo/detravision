@@ -220,6 +220,54 @@ def test_admin_upload_is_content_validated_randomly_named_and_publicly_served(si
     assert (upload_dir / Path(key)).is_file()
 
 
+@pytest.mark.parametrize(
+    ("filename", "content", "media_type"),
+    [
+        ("logo", image_bytes("PNG"), "image/png"),
+        ("logo.txt", image_bytes("PNG"), "image/png"),
+        ("logo.jpg", image_bytes("PNG"), "image/png"),
+    ],
+)
+def test_logo_rejects_missing_unsupported_or_content_mismatched_extension(
+    site_app,
+    filename: str,
+    content: bytes,
+    media_type: str,
+):
+    """Catches accepting a client extension that is absent, unsafe, or forged."""
+    _, _, _, upload_dir = site_app
+    with client_for(site_app, "admin") as client:
+        response = client.post(
+            "/api/settings/site/logo",
+            files={"file": (filename, content, media_type)},
+        )
+    assert response.status_code == 415
+    assert stored_files(upload_dir) == set()
+
+
+@pytest.mark.parametrize(
+    ("filename", "image_format", "media_type"),
+    [
+        ("LOGO.PNG", "PNG", "image/png"),
+        ("LOGO.JpEg", "JPEG", "image/jpeg"),
+        ("LOGO.WeBp", "WEBP", "image/webp"),
+    ],
+)
+def test_logo_extension_validation_is_case_insensitive(
+    site_app,
+    filename: str,
+    image_format: str,
+    media_type: str,
+):
+    """Catches valid uppercase or mixed-case extensions being rejected."""
+    with client_for(site_app, "admin") as client:
+        response = client.post(
+            "/api/settings/site/logo",
+            files={"file": (filename, image_bytes(image_format), media_type)},
+        )
+    assert response.status_code == 200
+
+
 def test_replacing_logo_removes_old_file_only_after_new_setting_commits(site_app):
     """Catches successful replacement leaking the superseded Logo file."""
     _, _, session_factory, upload_dir = site_app
@@ -337,6 +385,94 @@ def test_database_failure_removes_new_logo_and_preserves_old_setting(site_app):
         assert session.get(SiteSettings, 1) is None
 
 
+def test_storage_write_failure_returns_stable_503_without_path_leak(
+    site_app,
+    monkeypatch,
+    caplog,
+    tmp_path,
+):
+    """Catches local storage errors escaping as unstable 500 responses or path-bearing logs."""
+    api_app, _, _, _ = site_app
+    secret_path = str(tmp_path / "private" / "logo.png")
+
+    def fail_save(*_args, **_kwargs):
+        raise OSError(28, "disk full", secret_path)
+
+    monkeypatch.setattr(api_app.state.file_storage, "save", fail_save)
+    caplog.set_level("ERROR")
+    with client_for(site_app, "admin", raise_server_exceptions=False) as client:
+        response = client.post(
+            "/api/settings/site/logo",
+            files={"file": ("logo.png", image_bytes(), "image/png")},
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "site storage is temporarily unavailable"}
+    assert secret_path not in response.text
+    assert secret_path not in caplog.text
+    storage_records = [
+        record for record in caplog.records
+        if "site_logo_storage_unavailable" in record.getMessage()
+    ]
+    assert len(storage_records) == 1
+    assert "error_type=OSError" in storage_records[0].getMessage()
+    assert storage_records[0].exc_info is None
+
+
+def test_failed_old_logo_delete_is_discoverable_and_retryable_after_restart(
+    site_app,
+    monkeypatch,
+    caplog,
+    tmp_path,
+):
+    """Catches a failed superseded-Logo deletion losing the key needed for recovery."""
+    api_app, _, session_factory, upload_dir = site_app
+    storage = api_app.state.file_storage
+    with client_for(site_app, "admin") as client:
+        assert client.post(
+            "/api/settings/site/logo",
+            files={"file": ("first.png", image_bytes(), "image/png")},
+        ).status_code == 200
+        with session_factory() as session:
+            first_key = session.get(SiteSettings, 1).logo_key
+
+        real_delete = storage.delete
+        secret_path = str(tmp_path / "private" / "first.png")
+        failures = 0
+
+        def fail_first_old_delete(key: str) -> None:
+            nonlocal failures
+            if key == first_key and failures == 0:
+                failures += 1
+                raise OSError(5, "delete failed", secret_path)
+            real_delete(key)
+
+        monkeypatch.setattr(storage, "delete", fail_first_old_delete)
+        caplog.set_level("ERROR")
+        assert client.post(
+            "/api/settings/site/logo",
+            files={"file": ("second.png", image_bytes(), "image/png")},
+        ).status_code == 200
+
+    assert first_key is not None
+    assert (upload_dir / Path(first_key)).is_file()
+    assert secret_path not in caplog.text
+    cleanup_records = [
+        record for record in caplog.records
+        if "site_logo_cleanup_failed" in record.getMessage()
+    ]
+    assert len(cleanup_records) == 1
+    assert "error_type=OSError" in cleanup_records[0].getMessage()
+    assert cleanup_records[0].exc_info is None
+
+    # A new service instance has no in-memory knowledge of first_key. Recovery
+    # therefore proves the cleanup mechanism can discover persisted orphans.
+    service_type = type(api_app.state.brand_service)
+    restarted_service = service_type(session_factory, storage)
+    assert restarted_service.cleanup_orphaned_logos() == 1
+    assert not (upload_dir / Path(first_key)).exists()
+
+
 def test_brand_changes_are_audited_without_storage_keys(site_app):
     """Catches brand mutations missing audit records or exposing local storage details."""
     _, _, session_factory, _ = site_app
@@ -378,6 +514,49 @@ def test_local_storage_rejects_path_traversal_for_every_operation(tmp_path):
         storage.delete("../outside.txt")
 
     assert outside.read_bytes() == b"do not touch"
+
+
+@pytest.mark.parametrize(
+    "malicious_path",
+    [
+        "C:\\private\\logo.png",
+        "\\\\server\\share\\logo.png",
+        "/var/private/logo.png",
+    ],
+)
+def test_local_storage_rejects_platform_absolute_paths(tmp_path, malicious_path: str):
+    """Catches Windows drive, UNC, or POSIX absolute paths escaping storage."""
+    LocalFileStorage = load_component("backend.storage", "LocalFileStorage")
+    storage = LocalFileStorage(tmp_path / "root")
+    with pytest.raises(ValueError):
+        storage.save(io.BytesIO(b"data"), malicious_path, "png")
+    with pytest.raises(ValueError):
+        storage.open(malicious_path)
+    with pytest.raises(ValueError):
+        storage.delete(malicious_path)
+
+
+def test_local_storage_rejects_symlink_escape_when_supported(tmp_path):
+    """Catches a key resolving through a storage-root symlink to an outside directory."""
+    LocalFileStorage = load_component("backend.storage", "LocalFileStorage")
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    (outside / "secret.txt").write_text("keep", encoding="utf-8")
+    try:
+        (root / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {type(exc).__name__}")
+
+    storage = LocalFileStorage(root)
+    with pytest.raises(ValueError):
+        storage.open("linked/secret.txt")
+    with pytest.raises(ValueError):
+        storage.delete("linked/secret.txt")
+    with pytest.raises(ValueError):
+        storage.save(io.BytesIO(b"data"), "linked", "png")
+    assert (outside / "secret.txt").read_text(encoding="utf-8") == "keep"
 
 
 def test_local_storage_failed_write_leaves_no_partial_final_or_temp_file(tmp_path):

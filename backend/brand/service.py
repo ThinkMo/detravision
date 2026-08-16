@@ -78,15 +78,21 @@ class BrandService:
         except BaseException:
             try:
                 self._storage.delete(new_key)
-            except Exception:
-                logger.exception("failed to remove new Logo after settings rollback")
+            except Exception as cleanup_error:
+                logger.error(
+                    "site_logo_rollback_cleanup_failed error_type=%s",
+                    type(cleanup_error).__name__,
+                )
             raise
 
         if old_key is not None and old_key != new_key:
             try:
                 self._storage.delete(old_key)
-            except Exception:
-                logger.exception("failed to remove superseded Logo; cleanup retry required")
+            except Exception as cleanup_error:
+                logger.error(
+                    "site_logo_cleanup_failed error_type=%s",
+                    type(cleanup_error).__name__,
+                )
         return result
 
     def open_logo(self) -> tuple[BinaryIO, str] | None:
@@ -107,3 +113,31 @@ class BrandService:
         except FileNotFoundError:
             logger.error("stored Logo is missing")
             return None
+
+    def cleanup_orphaned_logos(self) -> int:
+        """Remove Logo files not referenced by the singleton setting.
+
+        Discovery comes from persisted storage, so a new process can recover
+        keys that were lost after a prior post-commit deletion failure.
+        """
+        current_key = self.get().logo_key
+        cleaned = 0
+        try:
+            for key in self._storage.iter_keys("site-logo"):
+                if key == current_key:
+                    continue
+                try:
+                    self._storage.delete(key)
+                except OSError as cleanup_error:
+                    logger.error(
+                        "site_logo_cleanup_failed error_type=%s",
+                        type(cleanup_error).__name__,
+                    )
+                else:
+                    cleaned += 1
+        except OSError as scan_error:
+            logger.error(
+                "site_logo_cleanup_scan_failed error_type=%s",
+                type(scan_error).__name__,
+            )
+        return cleaned

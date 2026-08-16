@@ -11,7 +11,9 @@ from backend.db import models  # noqa: F401 - registers metadata for Alembic
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Migrations run inside application startup after module loggers exist.
+    # Keep those loggers enabled so storage/audit failures remain observable.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
+from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel, Field, field_validator
@@ -22,6 +24,13 @@ from backend.storage import (
 MAX_LOGO_BYTES = 10 * 1024 * 1024
 MAX_LOGO_PIXELS = 40_000_000
 ALLOWED_LOGO_MEDIA_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
+LOGO_EXTENSION_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/settings/site",
@@ -50,6 +59,17 @@ def _service_unavailable() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail="site settings are temporarily unavailable",
+    )
+
+
+def _storage_unavailable(error: OSError) -> HTTPException:
+    logger.error(
+        "site_logo_storage_unavailable error_type=%s",
+        type(error).__name__,
+    )
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="site storage is temporarily unavailable",
     )
 
 
@@ -98,6 +118,14 @@ def replace_site_logo(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="Logo must be PNG, JPEG, or WebP",
         )
+    filename = (file.filename or "").replace("\\", "/")
+    extension = PurePosixPath(filename).suffix.casefold()
+    extension_type = LOGO_EXTENSION_MEDIA_TYPES.get(extension)
+    if extension_type is None:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Logo filename must end with .png, .jpg, .jpeg, or .webp",
+        )
     try:
         image = validate_image(
             file.file,
@@ -125,10 +153,17 @@ def replace_site_logo(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="declared media type does not match decoded image",
         )
+    if image.media_type != extension_type:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="filename extension does not match decoded image",
+        )
     try:
         result = brand_service(request).replace_logo(image)
     except SQLAlchemyError as exc:
         raise _service_unavailable() from exc
+    except OSError as exc:
+        raise _storage_unavailable(exc) from exc
     audit_service(request).record(
         user.id,
         "site_logo_update",
@@ -154,6 +189,8 @@ def get_site_logo(request: Request) -> StreamingResponse:
         stored = brand_service(request).open_logo()
     except (SQLAlchemyError, ValueError) as exc:
         raise _service_unavailable() from exc
+    except OSError as exc:
+        raise _storage_unavailable(exc) from exc
     if stored is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Logo not found")
     stream, media_type = stored
