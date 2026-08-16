@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+from fastapi import Depends
 from sqlalchemy import select
 
-from backend.auth import AuthService, hash_password, verify_password
+from backend.auth import AuthenticatedUser, AuthService, hash_password, verify_password
+from backend.auth.dependencies import current_user, require_admin
 from backend.core.config import Settings
 from backend.db.migrate import run_migrations
 from backend.db.models import AuditLog, User, UserSession
@@ -290,6 +294,70 @@ def test_final_enabled_administrator_cannot_be_disabled_or_demoted(auth_api, upd
         me = send(client, "GET", "/api/auth/me")
         assert me.status_code == 200
         assert me.json()["role"] == "admin"
+
+
+def test_concurrent_updates_preserve_one_enabled_administrator(auth_api):
+    """Catches concurrent removals each relying on a stale view of the other admin."""
+    api_app, _, session_factory = auth_api
+    with api_client(auth_api) as client:
+        establish_admin(client)
+        created = send(
+            client,
+            "POST",
+            "/api/users",
+            json={
+                "username": "second.admin",
+                "password": "Second-admin-123",
+                "role": "admin",
+            },
+        )
+        assert created.status_code == 201
+        second_admin_id = created.json()["id"]
+        raw_cookie = client.cookies["session"]
+
+    both_authenticated = threading.Barrier(2)
+
+    def synchronized_admin(
+        user: AuthenticatedUser = Depends(current_user),
+    ) -> AuthenticatedUser:
+        both_authenticated.wait(timeout=10)
+        return user
+
+    api_app.dependency_overrides[require_admin] = synchronized_admin
+
+    def update(path: str, payload: dict[str, object]) -> int:
+        async def request() -> int:
+            transport = httpx.ASGITransport(app=api_app, raise_app_exceptions=False)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+                cookies={"session": raw_cookie},
+            ) as concurrent_client:
+                response = await concurrent_client.patch(path, json=payload)
+                return response.status_code
+
+        return asyncio.run(request())
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(update, "/api/users/1", {"enabled": False}),
+                executor.submit(
+                    update,
+                    f"/api/users/{second_admin_id}",
+                    {"role": "user"},
+                ),
+            ]
+            statuses = [future.result(timeout=15) for future in futures]
+    finally:
+        api_app.dependency_overrides.pop(require_admin, None)
+
+    assert sorted(statuses) == [200, 409]
+    with session_factory() as session:
+        enabled_admins = session.scalars(
+            select(User).where(User.role == "admin", User.enabled.is_(True))
+        ).all()
+        assert len(enabled_admins) == 1
 
 
 def test_reset_returns_temporary_password_once_without_persisting_or_logging_it(

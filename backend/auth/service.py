@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from threading import Lock
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -34,6 +35,10 @@ class LoginRateLimited(AuthError):
 
 class PasswordValidationError(AuthError):
     """A replacement password violates the local password policy."""
+
+
+class FinalAdminError(AuthError):
+    """A user mutation would remove the final enabled administrator."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +83,7 @@ class AuthService:
     ) -> None:
         self._session_factory = session_factory
         self._settings = settings
+        self._user_admin_lock = Lock()
         self.rate_limiter = rate_limiter or LoginRateLimiter()
         self.users = UserReader(session_factory)
 
@@ -246,6 +252,45 @@ class AuthService:
             user.updated_at = datetime.now(timezone.utc)
             if not enabled:
                 self._revoke_user_sessions(session, user.id)
+
+    def update_user(
+        self,
+        user_id: int,
+        *,
+        role: str | None = None,
+        enabled: bool | None = None,
+    ) -> User:
+        with self._user_admin_lock:
+            with self._session_factory.begin() as session:
+                enabled_admins = session.scalars(
+                    select(User)
+                    .where(User.role == "admin", User.enabled.is_(True))
+                    .order_by(User.id)
+                    .with_for_update()
+                ).all()
+                user = session.get(User, user_id)
+                if user is None:
+                    raise AuthenticationError("user does not exist")
+
+                next_role = role if role is not None else user.role
+                next_enabled = enabled if enabled is not None else user.enabled
+                removes_enabled_admin = (
+                    user.role == "admin"
+                    and user.enabled
+                    and (next_role != "admin" or not next_enabled)
+                )
+                if removes_enabled_admin and len(enabled_admins) == 1:
+                    raise FinalAdminError(
+                        "cannot remove the final enabled administrator"
+                    )
+
+                user.role = next_role
+                user.enabled = next_enabled
+                user.updated_at = datetime.now(timezone.utc)
+                if enabled is False:
+                    self._revoke_user_sessions(session, user.id)
+                session.flush()
+                return user
 
     @staticmethod
     def _validate_replacement(

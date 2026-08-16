@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from backend.auth import (
     AuthenticationError,
+    FinalAdminError,
     PasswordValidationError,
     hash_password,
 )
 from backend.auth.dependencies import auth_service, require_admin, require_same_origin
-from backend.db.models import User, UserSession
+from backend.db.models import User
 from backend.schemas import (
     TemporaryPasswordResponse,
     UserCreate,
@@ -81,44 +81,23 @@ def create_user(payload: UserCreate, request: Request):
 
 @router.patch("/{user_id}", response_model=UserResponse)
 def update_user(user_id: int, payload: UserUpdate, request: Request):
-    with _session_factory(request).begin() as session:
-        user = session.get(User, user_id)
-        if user is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="user not found",
-            )
-
-        next_role = payload.role if payload.role is not None else user.role
-        next_enabled = payload.enabled if payload.enabled is not None else user.enabled
-        removes_enabled_admin = (
-            user.role == "admin"
-            and user.enabled
-            and (next_role != "admin" or not next_enabled)
+    try:
+        user = auth_service(request).update_user(
+            user_id,
+            role=payload.role,
+            enabled=payload.enabled,
         )
-        if removes_enabled_admin:
-            other_admins = session.scalar(
-                select(func.count())
-                .select_from(User)
-                .where(
-                    User.id != user.id,
-                    User.role == "admin",
-                    User.enabled.is_(True),
-                )
-            )
-            if not other_admins:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="cannot remove the final enabled administrator",
-                )
-
-        user.role = next_role
-        user.enabled = next_enabled
-        user.updated_at = datetime.now(timezone.utc)
-        if payload.enabled is False:
-            session.execute(delete(UserSession).where(UserSession.user_id == user.id))
-        session.flush()
-        return _user_response(user)
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="user not found",
+        ) from exc
+    except FinalAdminError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="cannot remove the final enabled administrator",
+        ) from exc
+    return _user_response(user)
 
 
 @router.post("/{user_id}/reset-password", response_model=TemporaryPasswordResponse)
