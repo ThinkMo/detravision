@@ -135,7 +135,9 @@ class Repository:
     def replace_group_members(self, group_id: int, person_ids: list[int]) -> None:
         with self.session_factory.begin() as session:
             session.execute(alarm_group_member.delete().where(alarm_group_member.c.group_id == group_id))
-            session.execute(alarm_group_member.insert(), [{"group_id": group_id, "person_id": person_id} for person_id in person_ids])
+            members = [{"group_id": group_id, "person_id": person_id} for person_id in person_ids]
+            if members:
+                session.execute(alarm_group_member.insert(), members)
 
     def group_members(self, group_id: int) -> list[dict[str, Any]]:
         statement = (
