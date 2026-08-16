@@ -126,6 +126,94 @@ class LogoCleanupQueue(Base):
     )
 
 
+class BatchJob(Base):
+    __tablename__ = "batch_job"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'processing', 'completed', 'partial_failed', 'failed')",
+            name="status",
+        ),
+        CheckConstraint("image_total > 0", name="image_total_positive"),
+        CheckConstraint("success_count >= 0", name="success_count_nonnegative"),
+        CheckConstraint("failure_count >= 0", name="failure_count_nonnegative"),
+        CheckConstraint(
+            "success_count + failure_count <= image_total",
+            name="terminal_counts_within_total",
+        ),
+        Index("ix_batch_job_user_created", "user_id", "created_at"),
+        Index("ix_batch_job_status", "status"),
+        Index("ix_batch_job_expires_at", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("('queued')")
+    )
+    image_total: Mapped[int] = mapped_column(Integer, nullable=False)
+    success_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    failure_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
+class BatchImage(Base):
+    __tablename__ = "batch_image"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'processing', 'completed', 'failed')",
+            name="status",
+        ),
+        CheckConstraint("length(display_name) > 0", name="display_name_nonempty"),
+        CheckConstraint("length(source_key) > 0", name="source_key_nonempty"),
+        CheckConstraint(
+            "status != 'completed' OR annotated_key IS NOT NULL",
+            name="completed_has_annotation",
+        ),
+        CheckConstraint(
+            "status != 'failed' OR error_code IS NOT NULL",
+            name="failed_has_error_code",
+        ),
+        Index("ix_batch_image_job_status", "job_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("batch_job.id", ondelete="CASCADE"), nullable=False
+    )
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    source_key: Mapped[str] = mapped_column(Text, nullable=False)
+    annotated_key: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("('queued')")
+    )
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    model_version_id: Mapped[int | None] = mapped_column(
+        ForeignKey("model_version.id", ondelete="SET NULL")
+    )
+    detections_json: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("('[]')")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_log"
 

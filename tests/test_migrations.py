@@ -14,7 +14,7 @@ from sqlalchemy.engine import make_url
 
 from backend.db import migrate
 from backend.db.migrate import alembic_config, run_migrations
-from backend.db.models import Camera, DetectionEvent, ModelVersion, UserSession
+from backend.db.models import BatchImage, Camera, DetectionEvent, ModelVersion, UserSession
 from backend.db.session import create_engine_from_url, create_session_factory
 
 
@@ -103,7 +103,37 @@ def test_fresh_sqlite_upgrade_creates_all_tables(tmp_path):
         "site_settings",
         "audit_log",
         "logo_cleanup_queue",
+        "batch_job",
+        "batch_image",
     } <= names
+
+
+def test_batch_migration_has_portable_foreign_keys_and_query_indexes(tmp_path):
+    """Catches missing ownership/result lineage or indexes needed by job workers."""
+    url = "sqlite:///" + (tmp_path / "batch-schema.db").as_posix()
+    run_migrations(url)
+    inspector = inspect(create_engine(url))
+
+    assert {fk["referred_table"] for fk in inspector.get_foreign_keys("batch_job")} == {
+        "user"
+    }
+    assert {
+        fk["referred_table"] for fk in inspector.get_foreign_keys("batch_image")
+    } == {"batch_job", "model_version"}
+    job_indexes = {
+        tuple(index["column_names"]) for index in inspector.get_indexes("batch_job")
+    }
+    image_indexes = {
+        tuple(index["column_names"]) for index in inspector.get_indexes("batch_image")
+    }
+    assert {("user_id", "created_at"), ("status",), ("expires_at",)} <= job_indexes
+    assert {("job_id", "status"),} <= image_indexes
+
+
+def test_batch_result_and_status_fields_remain_text_in_metadata():
+    """Catches introducing dialect-specific enums or JSON columns."""
+    assert isinstance(BatchImage.__table__.c.status.type, Text)
+    assert isinstance(BatchImage.__table__.c.detections_json.type, Text)
 
 
 def test_legacy_sqlite_is_stamped_then_upgraded(legacy_database_url):
@@ -111,7 +141,7 @@ def test_legacy_sqlite_is_stamped_then_upgraded(legacy_database_url):
     run_migrations(legacy_database_url)
 
     with create_engine(legacy_database_url).connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0003"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0004"
         event_columns = {column["name"] for column in inspect(connection).get_columns("detection_event")}
     assert {"ack_by", "ack_user_id"} <= event_columns
 
