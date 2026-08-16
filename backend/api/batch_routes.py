@@ -156,6 +156,7 @@ def job_response(job) -> BatchJobResponse:
 
 
 def image_response(job_id: int, image) -> BatchImageResponse:
+    base = f"/api/batch-jobs/{job_id}/images/{image.id}"
     return BatchImageResponse(
         id=image.id,
         display_name=image.display_name,
@@ -164,9 +165,8 @@ def image_response(job_id: int, image) -> BatchImageResponse:
         error_message=image.error_message,
         model_version_id=image.model_version_id,
         detections=image.detections,
-        result_url=(
-            f"/api/batch-jobs/{job_id}/images/{image.id}/download"
-        ),
+        preview_url=f"{base}/preview",
+        result_url=f"{base}/download",
         created_at=image.created_at,
         updated_at=image.updated_at,
     )
@@ -281,6 +281,28 @@ def download_batch_image(
         _stream_and_close(download.stream),
         media_type=download.media_type,
         headers={"Content-Disposition": disposition},
+    )
+
+
+@router.get("/{job_id}/images/{image_id}/preview")
+def preview_batch_image(
+    job_id: int,
+    image_id: int,
+    request: Request,
+    user: AuthenticatedUser = Depends(current_user),
+):
+    try:
+        result = batch_service(request).open_result(user, job_id, image_id)
+    except BatchServiceError as exc:
+        return error_response(exc)
+    disposition = f"inline; filename*=UTF-8''{quote(result.filename, safe='')}"
+    return StreamingResponse(
+        _stream_and_close(result.stream),
+        media_type=result.media_type,
+        headers={
+            "Content-Disposition": disposition,
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 

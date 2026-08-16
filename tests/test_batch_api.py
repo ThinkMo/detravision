@@ -561,6 +561,9 @@ def test_detail_has_safe_result_urls_and_no_storage_keys(batch_app):
     assert detail.status_code == 200
     payload = detail.json()
     assert payload["images"][0]["display_name"] == "unsafe.png"
+    assert payload["images"][0]["preview_url"].endswith(
+        f"/images/{payload['images'][0]['id']}/preview"
+    )
     assert payload["images"][0]["result_url"].endswith(
         f"/images/{payload['images'][0]['id']}/download"
     )
@@ -610,6 +613,134 @@ def test_single_download_serves_only_completed_annotation_with_safe_filename(bat
     disposition = downloaded.headers["content-disposition"]
     assert "attachment" in disposition
     assert ".." not in disposition and "\r" not in disposition and "\n" not in disposition
+
+
+def test_preview_serves_completed_annotation_inline_with_nosniff(batch_app):
+    """Catches previews serving source bytes, completed results as downloads, or sniffable content."""
+    source = image_bytes()
+    with client_for(batch_app, "user") as client:
+        job = client.post(
+            "/api/batch-jobs",
+            files=upload_files(("report.png", source, "image/png")),
+        ).json()
+        image_id = client.get(f"/api/batch-jobs/{job['id']}").json()["images"][0]["id"]
+        incomplete = client.get(
+            f"/api/batch-jobs/{job['id']}/images/{image_id}/preview"
+        )
+        _complete_first_image(batch_app, job["id"], b"annotated-only")
+        preview = client.get(
+            f"/api/batch-jobs/{job['id']}/images/{image_id}/preview"
+        )
+        download = client.get(
+            f"/api/batch-jobs/{job['id']}/images/{image_id}/download"
+        )
+
+    assert incomplete.status_code == 404
+    assert preview.status_code == 200
+    assert preview.content == b"annotated-only"
+    assert preview.content != source
+    assert preview.headers["content-type"].startswith("image/jpeg")
+    assert preview.headers["content-disposition"].startswith("inline;")
+    assert preview.headers["x-content-type-options"] == "nosniff"
+    assert download.headers["content-disposition"].startswith("attachment;")
+
+
+def test_preview_requires_authentication_hides_other_users_result_and_allows_admin(batch_app):
+    """Catches preview routes bypassing session, ownership, or administrator access rules."""
+    with client_for(batch_app, "user") as user_client:
+        job = user_client.post(
+            "/api/batch-jobs",
+            files=upload_files(("private.png", image_bytes(), "image/png")),
+        ).json()
+        image_id = _complete_first_image(batch_app, job["id"], b"private-result")
+    path = f"/api/batch-jobs/{job['id']}/images/{image_id}/preview"
+    with client_for(batch_app) as anonymous_client:
+        anonymous = anonymous_client.get(path)
+    with client_for(batch_app, "other") as other_client:
+        hidden = other_client.get(path)
+    with client_for(batch_app, "admin") as admin_client:
+        admin = admin_client.get(path)
+
+    assert anonymous.status_code == 401
+    assert hidden.status_code == 404
+    assert admin.status_code == 200
+    assert admin.content == b"private-result"
+
+
+def test_preview_rejects_image_from_a_different_job(batch_app):
+    """Catches an image ID being accepted without proving it belongs to the requested job."""
+    _, _, repository, _, _, _ = batch_app
+    with client_for(batch_app, "user") as client:
+        first = client.post(
+            "/api/batch-jobs",
+            files=upload_files(("first.png", image_bytes(), "image/png")),
+        ).json()
+        second = client.post(
+            "/api/batch-jobs",
+            files=upload_files(("second.png", image_bytes(), "image/png")),
+        ).json()
+        first_image = repository.claim_next_image()
+        assert first_image is not None and first_image.job_id == first["id"]
+        repository.fail_image(first_image.id, "inference_failed", "inference failed")
+        image_id = _complete_first_image(batch_app, second["id"])
+        mismatched = client.get(
+            f"/api/batch-jobs/{first['id']}/images/{image_id}/preview"
+        )
+
+    assert mismatched.status_code == 404
+
+
+@pytest.mark.parametrize("annotated_key", ["batch-result/missing.jpg", "../batch-result.jpg"])
+def test_preview_hides_missing_and_escaping_storage_paths(batch_app, annotated_key):
+    """Catches missing files or escaped storage keys leaking implementation details."""
+    _, _, repository, _, _, _ = batch_app
+    with client_for(batch_app, "user") as client:
+        job = client.post(
+            "/api/batch-jobs",
+            files=upload_files(("one.png", image_bytes(), "image/png")),
+        ).json()
+        claimed = repository.claim_next_image()
+        assert claimed is not None and claimed.job_id == job["id"]
+        repository.complete_image(
+            claimed.id,
+            CompletedImage(
+                annotated_key=annotated_key,
+                model_version_id=None,
+                detections=[],
+            ),
+        )
+        preview = client.get(
+            f"/api/batch-jobs/{job['id']}/images/{claimed.id}/preview"
+        )
+
+    assert preview.status_code == 404
+    assert annotated_key not in preview.text
+
+
+def test_preview_hides_storage_exception_details_from_response_and_logs(
+    batch_app, monkeypatch, caplog
+):
+    """Catches storage exception messages, including absolute paths, crossing the API boundary."""
+    _, _, _, storage, _, _ = batch_app
+    sentinel = "C:\\private-results\\preview-sentinel.jpg"
+
+    def fail_open(_key):
+        raise OSError(sentinel)
+
+    monkeypatch.setattr(storage, "open", fail_open)
+    with client_for(batch_app, "user") as client:
+        job = client.post(
+            "/api/batch-jobs",
+            files=upload_files(("one.png", image_bytes(), "image/png")),
+        ).json()
+        image_id = _complete_first_image(batch_app, job["id"])
+        preview = client.get(
+            f"/api/batch-jobs/{job['id']}/images/{image_id}/preview"
+        )
+
+    assert preview.status_code == 404
+    assert sentinel not in preview.text
+    assert sentinel not in caplog.text
 
 
 def test_job_zip_contains_manifest_and_successful_annotations_only(batch_app):

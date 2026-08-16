@@ -124,6 +124,7 @@ class BatchImageResponse(BaseModel):
     error_message: str | None
     model_version_id: int | None
     detections: list[dict[str, object]]
+    preview_url: str
     result_url: str
     created_at: datetime
     updated_at: datetime

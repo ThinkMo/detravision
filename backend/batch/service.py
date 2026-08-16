@@ -51,10 +51,13 @@ class BatchServiceError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
-class BatchDownload:
+class ResultDownload:
     stream: BinaryIO
     filename: str
     media_type: str
+
+
+BatchDownload = ResultDownload
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,7 +231,7 @@ class BatchService:
         user: AuthenticatedUser,
         job_id: int,
         image_id: int,
-    ) -> BatchDownload:
+    ) -> ResultDownload:
         _job, images = self.get_job(user, job_id)
         image = next((item for item in images if item.id == image_id), None)
         if (
@@ -254,7 +257,7 @@ class BatchService:
             f"{stem}.jpg",
             fallback=f"image-{image.id}.jpg",
         )
-        return BatchDownload(stream=stream, filename=filename, media_type="image/jpeg")
+        return ResultDownload(stream=stream, filename=filename, media_type="image/jpeg")
 
     def create_zip(
         self,
