@@ -21,8 +21,8 @@ from backend.schemas import (
     PersonUpdate,
 )
 
-router = APIRouter(
-    prefix="/api",
+router = APIRouter(prefix="/api")
+protected_router = APIRouter(
     dependencies=[Depends(require_same_origin), Depends(current_user)],
 )
 
@@ -93,12 +93,12 @@ def health(request: Request) -> dict[str, Any]:
     return {"status": "ok", "runtime": runtime.status()}
 
 
-@router.get("/cameras")
+@protected_router.get("/cameras")
 def cameras(db: Repository = Depends(repository)) -> list[dict[str, Any]]:
     return db.list_cameras()
 
 
-@router.post("/cameras", status_code=status.HTTP_201_CREATED)
+@protected_router.post("/cameras", status_code=status.HTTP_201_CREATED)
 def create_camera(
     payload: CameraCreate,
     request: Request,
@@ -111,7 +111,7 @@ def create_camera(
     return camera
 
 
-@router.patch("/cameras/{camera_id}")
+@protected_router.patch("/cameras/{camera_id}")
 def update_camera(
     camera_id: int,
     payload: CameraUpdate,
@@ -127,7 +127,7 @@ def update_camera(
     return camera
 
 
-@router.delete("/cameras/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
+@protected_router.delete("/cameras/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_camera(
     camera_id: int,
     request: Request,
@@ -140,12 +140,12 @@ def delete_camera(
     record_success(request, user, "delete", "camera", camera_id)
 
 
-@router.get("/persons")
+@protected_router.get("/persons")
 def persons(db: Repository = Depends(repository)) -> list[dict[str, Any]]:
     return db.list_persons()
 
 
-@router.post("/persons", status_code=status.HTTP_201_CREATED)
+@protected_router.post("/persons", status_code=status.HTTP_201_CREATED)
 def create_person(
     payload: PersonCreate,
     request: Request,
@@ -158,7 +158,7 @@ def create_person(
     return person
 
 
-@router.patch("/persons/{person_id}")
+@protected_router.patch("/persons/{person_id}")
 def update_person(
     person_id: int,
     payload: PersonUpdate,
@@ -174,7 +174,7 @@ def update_person(
     return person
 
 
-@router.delete("/persons/{person_id}", status_code=status.HTTP_204_NO_CONTENT)
+@protected_router.delete("/persons/{person_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_person(
     person_id: int,
     request: Request,
@@ -187,7 +187,7 @@ def delete_person(
     record_success(request, user, "delete", "person", person_id)
 
 
-@router.get("/alarm-groups")
+@protected_router.get("/alarm-groups")
 def alarm_groups(db: Repository = Depends(repository)) -> list[dict[str, Any]]:
     groups = db.list_alarm_groups()
     for group in groups:
@@ -195,7 +195,7 @@ def alarm_groups(db: Repository = Depends(repository)) -> list[dict[str, Any]]:
     return groups
 
 
-@router.post("/alarm-groups", status_code=status.HTTP_201_CREATED)
+@protected_router.post("/alarm-groups", status_code=status.HTTP_201_CREATED)
 def create_alarm_group(
     payload: AlarmGroupCreate,
     request: Request,
@@ -219,7 +219,7 @@ def create_alarm_group(
     return group
 
 
-@router.get("/events")
+@protected_router.get("/events")
 def events(
     camera_id: int | None = None,
     event_type: str | None = None,
@@ -229,7 +229,7 @@ def events(
     return db.list_events(camera_id=camera_id, event_type=event_type, status=event_status)
 
 
-@router.patch("/events/{event_id}")
+@protected_router.patch("/events/{event_id}")
 def update_event(
     event_id: int,
     payload: EventUpdate,
@@ -253,12 +253,12 @@ def update_event(
     return event
 
 
-@router.get("/models")
+@protected_router.get("/models")
 def models(db: Repository = Depends(repository)) -> list[dict[str, Any]]:
     return db.list_models()
 
 
-@router.post("/models", status_code=status.HTTP_201_CREATED)
+@protected_router.post("/models", status_code=status.HTTP_201_CREATED)
 def create_model(
     payload: ModelCreate,
     request: Request,
@@ -271,7 +271,7 @@ def create_model(
     return model
 
 
-@router.post("/models/{model_id}/activate")
+@protected_router.post("/models/{model_id}/activate")
 def activate_model(
     model_id: int,
     request: Request,
@@ -282,3 +282,6 @@ def activate_model(
         model = require(db.activate_model(model_id))
     record_success(request, user, "activate", "model", model_id)
     return model
+
+
+router.include_router(protected_router)

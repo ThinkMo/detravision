@@ -186,7 +186,6 @@ def test_permission_matrix(
 @pytest.mark.parametrize(
     ("method", "path"),
     [
-        ("GET", "/api/health"),
         ("GET", "/api/cameras"),
         ("GET", "/api/persons"),
         ("GET", "/api/alarm-groups"),

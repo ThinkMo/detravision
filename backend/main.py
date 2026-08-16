@@ -14,7 +14,7 @@ from backend.audit import AuditService
 from backend.auth import AuthenticatedUser, AuthService
 from backend.auth.dependencies import SESSION_COOKIE_NAME
 from backend.brand import BrandService
-from backend.core.config import settings
+from backend.core.config import Settings, settings
 from backend.db import Repository
 from backend.db.migrate import run_migrations
 from backend.db.session import create_engine_from_url, create_session_factory
@@ -26,43 +26,45 @@ from backend.ws import EventHub
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    run_migrations(settings.database_url)
-    engine = create_engine_from_url(settings.database_url)
-    session_factory = create_session_factory(engine)
-    repository = Repository(session_factory)
-    auth_service = AuthService(session_factory, settings)
-    audit_service = AuditService(session_factory)
-    file_storage = LocalFileStorage(settings.upload_dir)
-    brand_service = BrandService(session_factory, file_storage)
-    auth_service.bootstrap_admin()
-    brand_service.cleanup_pending_logos()
-    hub = EventHub()
-    runtime = RuntimeManager(settings, repository, build_detector(settings.model_path), hub)
-    app.state.repository = repository
-    app.state.session_factory = session_factory
-    app.state.auth_service = auth_service
-    app.state.audit_service = audit_service
-    app.state.file_storage = file_storage
-    app.state.brand_service = brand_service
-    app.state.cookie_secure = settings.cookie_secure
-    app.state.hub = hub
-    app.state.runtime = runtime
-    await runtime.start()
-    try:
-        yield
-    finally:
-        await runtime.stop()
-        engine.dispose()
+def application_lifespan(app_settings: Settings):
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        if app_settings.environment.casefold() == "development":
+            run_migrations(app_settings.database_url)
+        engine = create_engine_from_url(app_settings.database_url)
+        session_factory = create_session_factory(engine)
+        repository = Repository(session_factory)
+        auth_service = AuthService(session_factory, app_settings)
+        audit_service = AuditService(session_factory)
+        file_storage = LocalFileStorage(app_settings.upload_dir)
+        brand_service = BrandService(session_factory, file_storage)
+        auth_service.bootstrap_admin()
+        brand_service.cleanup_pending_logos()
+        hub = EventHub()
+        runtime = RuntimeManager(
+            app_settings,
+            repository,
+            build_detector(app_settings.model_path),
+            hub,
+        )
+        app.state.settings = app_settings
+        app.state.repository = repository
+        app.state.session_factory = session_factory
+        app.state.auth_service = auth_service
+        app.state.audit_service = audit_service
+        app.state.file_storage = file_storage
+        app.state.brand_service = brand_service
+        app.state.cookie_secure = app_settings.cookie_secure
+        app.state.hub = hub
+        app.state.runtime = runtime
+        await runtime.start()
+        try:
+            yield
+        finally:
+            await runtime.stop()
+            engine.dispose()
 
-
-app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
-app.include_router(router)
-app.include_router(auth_router)
-app.include_router(user_router)
-app.include_router(audit_router)
-app.include_router(site_router)
+    return lifespan
 
 
 async def authenticate_websocket(
@@ -82,7 +84,6 @@ async def authenticate_websocket(
     return user
 
 
-@app.websocket("/ws/events")
 async def event_stream(websocket: WebSocket) -> None:
     if await authenticate_websocket(websocket) is None:
         return
@@ -95,7 +96,6 @@ async def event_stream(websocket: WebSocket) -> None:
         hub.disconnect("events", websocket)
 
 
-@app.websocket("/ws/live/{camera_id}")
 async def live_stream(websocket: WebSocket, camera_id: int) -> None:
     if await authenticate_websocket(websocket) is None:
         return
@@ -107,3 +107,23 @@ async def live_stream(websocket: WebSocket, camera_id: int) -> None:
             await websocket.receive_text()
     except WebSocketDisconnect:
         hub.disconnect(channel, websocket)
+
+
+def create_app(app_settings: Settings | None = None) -> FastAPI:
+    configured = app_settings or settings
+    application = FastAPI(
+        title=configured.app_name,
+        version="0.1.0",
+        lifespan=application_lifespan(configured),
+    )
+    application.include_router(router)
+    application.include_router(auth_router)
+    application.include_router(user_router)
+    application.include_router(audit_router)
+    application.include_router(site_router)
+    application.add_api_websocket_route("/ws/events", event_stream)
+    application.add_api_websocket_route("/ws/live/{camera_id}", live_stream)
+    return application
+
+
+app = create_app()

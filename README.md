@@ -2,12 +2,14 @@
 
 基于 FastAPI 与 Ultralytics YOLO11 的中心化视频检测服务。系统接入多路 RTSP，按配置抽帧推理，将检测结果转换为可去重、可确认的业务事件，并通过 REST、WebSocket 和飞书机器人对外提供能力。
 
-当前仓库已实现可运行的后端 MVP；管理前端不在本阶段范围内。没有模型和摄像头时，API 仍可独立启动和配置。
+当前仓库已实现可运行的后端 MVP。没有模型和摄像头时，API 仍可独立启动和配置。
 
 ## 已实现能力
 
 - 摄像头、人员、告警组、事件和模型版本 REST API
-- SQLite 开发数据库及自动建表，仓储层与 API 解耦
+- SQLAlchemy 仓储、Alembic 迁移和 SQLite 开发数据库
+- 本地账号、服务端会话、管理员/普通用户权限和操作审计
+- 可配置的网站名称与 Logo
 - 配置收敛器：摄像头启停或参数变化后自动启停 RTSP 线程
 - 每路独立解码、全局有界帧队列、满队列丢弃最旧帧
 - Ultralytics 推理适配器；未配置模型时使用空检测器
@@ -49,7 +51,8 @@ REST 配置 ──> SQLite ──> reconciler ──> 每路 RTSP Capture
 backend/
 ├── api/routes.py          # REST API
 ├── core/                  # 配置与飞书通知
-├── db/database.py         # SQLite 仓储和建表
+├── auth/                  # 密码、会话与鉴权
+├── db/                    # SQLAlchemy 模型、仓储与迁移入口
 ├── engine/detector.py     # 空检测器 / Ultralytics 检测器
 ├── pipeline/runtime.py    # 收敛、推理、事件流水线
 ├── rules/engine.py        # ROI、语义关联、时序去重
@@ -79,7 +82,11 @@ python -m venv .venv
 pip install -r requirements-dev.txt
 ```
 
-复制 `.env.example` 为 `.env` 后，通过当前终端设置所需环境变量。程序不自动读取 `.env`；Docker Compose 会读取它。
+参考 `.env.example`，在当前终端设置所需环境变量。程序不会自动读取 `.env`，因此直接运行 Uvicorn 时必须由终端或进程管理器注入配置。
+
+开发环境默认使用 `sqlite:///data/safety_detect.db`。首次启动会自动执行 Alembic 迁移；若用户表为空，会创建管理员 `admin`。未设置 `ADMIN_INITIAL_PASSWORD` 时，开发环境的临时密码是 `admin123456`。
+
+> **安全警告：** `admin123456` 仅供本地开发。首次登录返回 `must_change_password=true`，修改密码前不能访问其他受保护接口。生产环境不会使用默认密码，必须显式设置 `ADMIN_INITIAL_PASSWORD`。
 
 启动服务：
 
@@ -104,7 +111,12 @@ pytest -q
 
 | 环境变量 | 默认值 | 说明 |
 |---|---:|---|
-| `DATABASE_PATH` | `data/safety_detect.db` | SQLite 文件 |
+| `APP_ENV` | `development` | 运行环境；仅 `development` 在启动时自动执行迁移 |
+| `DATABASE_URL` | `sqlite:///data/safety_detect.db` | SQLAlchemy 数据库 URL；当前本地验收使用 SQLite |
+| `ADMIN_INITIAL_PASSWORD` | 空 | 用户表为空时创建 `admin` 的初始密码；生产环境必填 |
+| `SESSION_TTL_HOURS` | `12` | 登录会话绝对有效期（小时） |
+| `COOKIE_SECURE` | `false` | 是否为会话 Cookie 设置 `Secure`；生产 HTTPS 应设为 `true` |
+| `UPLOAD_DIR` | `data/uploads` | Logo 与后续上传文件的本地存储目录 |
 | `SNAPSHOT_DIR` | `data/snapshots` | 告警抓拍目录 |
 | `MODEL_PATH` | 空 | 启动时加载的 PT/ONNX/Engine 模型 |
 | `WORKER_COUNT` | `1` | 推理线程数；单 GPU 建议从 1 开始压测 |
@@ -114,6 +126,22 @@ pytest -q
 | `FEISHU_WEBHOOK` | 空 | 飞书机器人 Webhook；为空则不通知 |
 
 `rtsp_url` 和 Webhook 属于敏感配置。生产环境应通过密钥管理系统注入，API 响应和日志也应增加脱敏与鉴权；当前 MVP 默认部署在可信内网，不应直接暴露到公网。
+
+## 数据库迁移与生产配置
+
+开发环境会在应用启动时自动升级数据库。生产环境必须先显式执行迁移，再启动服务；以下 PowerShell 示例中的密码仅为占位符，应由密钥管理系统注入：
+
+```powershell
+$env:APP_ENV = "production"
+$env:DATABASE_URL = "mysql+pymysql://safety:replace-me@127.0.0.1:3306/safety_detect?charset=utf8mb4"
+$env:ADMIN_INITIAL_PASSWORD = "replace-with-a-strong-password"
+$env:COOKIE_SECURE = "true"
+
+.\.venv\Scripts\python.exe -c "from backend.core.config import settings; from backend.db.migrate import run_migrations; run_migrations(settings.database_url)"
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app
+```
+
+MySQL 连接代码和受 `TEST_MYSQL_URL` 控制的迁移/仓储测试已保留，要求 MySQL 8.0.13 或更高版本。本轮只验收本地 SQLite；MySQL 实机验收与部署明确延后，当前无需安装或启动 MySQL、Docker。
 
 ## 数据与训练
 
@@ -214,8 +242,8 @@ Substitute your actual training run directory when it differs from
 
 ## 生产化路线
 
-1. 增加 JWT/OIDC、角色权限、RTSP URL 加密和审计日志。
-2. 将 SQLite 仓储替换为 PostgreSQL/MySQL + SQLAlchemy/Alembic，并增加分页。
+1. 增加 JWT/OIDC 和 RTSP URL 加密。
+2. 完成 MySQL 实机验收、备份恢复演练和多实例部署验证。
 3. 增加轨迹关联，使去重键从“摄像头 + 类型”细化为“摄像头 + 目标轨迹 + 类型”。
 4. 增加 Prometheus 指标、结构化日志、摄像头离线告警和推理延迟监控。
 5. 管理前端、对象存储、消息队列及多实例任务归属。
