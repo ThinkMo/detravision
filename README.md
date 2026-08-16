@@ -50,32 +50,28 @@ REST 配置 ──> SQLAlchemy 数据库 ──> reconciler ──> 每路 RTSP 
 ## 目录结构
 
 ```text
-backend/
-├── api/routes.py          # REST API
-├── core/                  # 配置与飞书通知
-├── auth/                  # 密码、会话与鉴权
-├── db/                    # SQLAlchemy 模型、仓储与迁移入口
-├── engine/detector.py     # 空检测器 / Ultralytics 检测器
-├── pipeline/runtime.py    # 收敛、推理、事件流水线
-├── rules/engine.py        # ROI、语义关联、时序去重
-├── stream/                # RTSP 解码和有界队列
-├── ws/hub.py              # WebSocket 广播
-└── main.py                # FastAPI 入口
-frontend/
-├── src/                   # React 页面、API 客户端与 Vitest 测试
-├── vite.config.ts         # 开发代理与构建配置
-└── dist/                  # 生产构建，由 FastAPI 同源托管
-training/
-├── configs/
-│  ├── construction-ppe-helmet.yaml
-│  └── safety.yaml
-├── prepare_construction_ppe.py
-├── train.py                 # train / resume / validate
-└── export.py
-deploy/                    # Dockerfile 与 Compose
-tests/                     # 数据库、队列、规则测试
-model_repo/                # 模型文件与元数据
+backend/       # FastAPI、鉴权、数据库、实时与批量推理
+frontend/      # React/Vite 管理控制台及前端测试
+training/      # 数据转换、训练、续训、验证和模型导出 CLI
+tests/         # Python 自动化测试
+migrations/    # Alembic 数据库迁移环境和版本脚本
+deploy/        # Dockerfile 与 Compose
+docs/          # 用户指南、设计规格和实施计划
+model_repo/    # 本地导出模型落点；Git 仅保留 .gitkeep
 ```
+
+本地生成目录不会进入 Git：
+
+```text
+data/                   # SQLite、上传文件及工具缓存
+datasets/               # 原始与转换后的训练集
+runs/                   # Ultralytics 训练和验证结果
+.venv/                  # Python 虚拟环境
+frontend/node_modules/  # Node.js 依赖
+frontend/dist/          # 前端生产构建，可由 npm run build 重建
+```
+
+完整文档索引见 [docs/README.md](docs/README.md)。
 
 ## 快速开始
 
