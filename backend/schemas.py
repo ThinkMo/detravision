@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -56,3 +57,42 @@ class ModelCreate(BaseModel):
     runtime: Literal["pt", "onnx-fp32", "tensorrt-fp16"] = "onnx-fp32"
     classes: list[str]
     map50: float | None = Field(default=None, ge=0, le=1)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=10, max_length=1024)
+
+
+class UserCreate(BaseModel):
+    username: str = Field(pattern=r"^[A-Za-z0-9_.-]{3,100}$")
+    password: str = Field(min_length=10, max_length=1024)
+    role: Literal["admin", "user"] = "user"
+
+
+class UserUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: Literal["admin", "user"] | None = None
+    enabled: bool | None = None
+
+
+class CurrentUserResponse(BaseModel):
+    id: int
+    username: str
+    role: Literal["admin", "user"]
+    must_change_password: bool
+
+
+class UserResponse(CurrentUserResponse):
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class TemporaryPasswordResponse(BaseModel):
+    temporary_password: str
