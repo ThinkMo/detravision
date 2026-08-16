@@ -21,7 +21,7 @@ from backend.core.config import Settings, settings
 from backend.db import Repository
 from backend.db.migrate import run_migrations
 from backend.db.session import create_engine_from_url, create_session_factory
-from backend.engine import build_detector
+from backend.engine import DetectorProvider, build_detector
 from backend.pipeline import RuntimeManager
 from backend.storage import LocalFileStorage
 from backend.web import mount_frontend
@@ -47,10 +47,14 @@ def application_lifespan(app_settings: Settings):
         auth_service.bootstrap_admin()
         brand_service.cleanup_pending_logos()
         hub = EventHub()
+        detector_provider = DetectorProvider(
+            build_detector(app_settings.model_path),
+            model_version_id=None,
+        )
         runtime = RuntimeManager(
             app_settings,
             repository,
-            build_detector(app_settings.model_path),
+            detector_provider,
             hub,
         )
         app.state.settings = app_settings
@@ -62,6 +66,7 @@ def application_lifespan(app_settings: Settings):
         app.state.brand_service = brand_service
         app.state.cookie_secure = app_settings.cookie_secure
         app.state.hub = hub
+        app.state.detector_provider = detector_provider
         app.state.runtime = runtime
         await runtime.start()
         try:

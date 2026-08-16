@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from backend.core.config import Settings
+from backend.engine import DetectorProvider, NoopDetector
 from backend.pipeline import runtime as runtime_module
 from backend.pipeline.runtime import RuntimeManager
 from backend.ws import EventHub
@@ -24,10 +25,11 @@ def test_model_reconciliation_logs_stable_fields_without_local_path(
     """Catches model paths or exception messages leaking on failure or success."""
     secret_path = str(tmp_path / "private-model-secret.onnx")
     repository = ActiveModelRepository({"id": 17, "file_path": secret_path})
+    provider = DetectorProvider(NoopDetector(), model_version_id=None)
     manager = RuntimeManager(
         Settings(enable_runtime=False),
         repository,
-        object(),
+        provider,
         EventHub(),
     )
     caplog.set_level(logging.INFO, logger=runtime_module.__name__)
@@ -49,7 +51,13 @@ def test_model_reconciliation_logs_stable_fields_without_local_path(
     assert secret_path not in caplog.text
 
     caplog.clear()
-    replacement = object()
+    marker = object()
+
+    class ReplacementDetector:
+        def predict(self, _image: object) -> list[object]:
+            return [marker]
+
+    replacement = ReplacementDetector()
     monkeypatch.setattr(runtime_module, "build_detector", lambda _path: replacement)
     manager._reconcile_model()
     success = [
@@ -61,4 +69,6 @@ def test_model_reconciliation_logs_stable_fields_without_local_path(
         "model_activation_succeeded model_id=17"
     ]
     assert secret_path not in caplog.text
-    assert manager.detector is replacement
+    result = provider.predict_batch(object())
+    assert result.detections == [marker]
+    assert result.model_version_id == 17

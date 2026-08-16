@@ -12,7 +12,7 @@ from backend.core.config import Settings
 from backend.core.notifier import FeishuNotifier
 from backend.core.public_records import public_event
 from backend.db import Repository
-from backend.engine import Detector, build_detector
+from backend.engine import DetectorProvider, build_detector
 from backend.rules import RuleEngine
 from backend.stream.capture import CaptureWorker
 from backend.stream.frame_queue import DropOldestQueue, Frame
@@ -22,10 +22,16 @@ logger = logging.getLogger(__name__)
 
 
 class RuntimeManager:
-    def __init__(self, settings: Settings, repository: Repository, detector: Detector, hub: EventHub):
+    def __init__(
+        self,
+        settings: Settings,
+        repository: Repository,
+        detector_provider: DetectorProvider,
+        hub: EventHub,
+    ):
         self.settings = settings
         self.repository = repository
-        self.detector = detector
+        self.detector_provider = detector_provider
         self.hub = hub
         self.frames = DropOldestQueue(settings.queue_size)
         self.rules = RuleEngine()
@@ -116,7 +122,7 @@ class RuntimeManager:
                 type(exc).__name__,
             )
             return
-        self.detector = replacement
+        self.detector_provider.replace(replacement, model_version_id=model["id"])
         self.model_signature = signature
         logger.info("model_activation_succeeded model_id=%s", model["id"])
 
@@ -137,7 +143,7 @@ class RuntimeManager:
         camera = self.repository.get_camera(frame.camera_id)
         if not camera or not camera["enabled"]:
             return
-        detections = self.detector.predict(frame.image)
+        detections = self.detector_provider.predict_realtime(frame.image).detections
         events = self.rules.evaluate(
             frame.camera_id,
             detections,
