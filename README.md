@@ -243,6 +243,8 @@ $env:REAL_MODEL_TEST_IMAGE_DIR = (Resolve-Path "datasets/construction-ppe/images
 
 ## 数据与训练
 
+从原始 Construction-PPE ZIP 构建三类训练集、执行冒烟训练、正式训练、续训和验证的完整步骤见 [训练集构建与模型训练指南](docs/training-guide.md)。
+
 类别定义：
 
 ```yaml
