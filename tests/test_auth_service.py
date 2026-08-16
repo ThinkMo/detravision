@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,7 @@ from backend.auth import (
     hash_password,
     verify_password,
 )
+from backend.auth import service as auth_service_module
 from backend.core.config import Settings
 from backend.db.migrate import run_migrations
 from backend.db.models import User, UserSession
@@ -93,6 +95,47 @@ def test_bootstrap_is_idempotent(auth_service, session_factory):
     assert second.id == first.id
     assert second.password_hash == first.password_hash
     assert count_rows(session_factory, User) == 1
+
+
+def test_concurrent_bootstrap_returns_once_without_overwriting_password(
+    session_factory,
+    settings_factory,
+    monkeypatch,
+):
+    first_password = "First-bootstrap-123"
+    second_password = "Second-bootstrap-123"
+    services = [
+        AuthService(
+            session_factory,
+            settings_factory(admin_initial_password=first_password),
+        ),
+        AuthService(
+            session_factory,
+            settings_factory(admin_initial_password=second_password),
+        ),
+    ]
+    real_hash_password = auth_service_module.hash_password
+    both_ready_to_insert = threading.Barrier(2)
+
+    def coordinated_hash(password: str) -> str:
+        encoded = real_hash_password(password)
+        both_ready_to_insert.wait(timeout=10)
+        return encoded
+
+    monkeypatch.setattr(auth_service_module, "hash_password", coordinated_hash)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(service.bootstrap_admin) for service in services]
+        for future in futures:
+            assert future.result(timeout=10) is None
+
+    user = services[0].users.by_username("admin")
+    assert user is not None
+    assert count_rows(session_factory, User) == 1
+    assert sum(
+        verify_password(candidate, user.password_hash)
+        for candidate in (first_password, second_password)
+    ) == 1
 
 
 def test_bootstrap_does_not_add_admin_when_any_user_exists(auth_service, session_factory):
@@ -265,6 +308,55 @@ def test_disabling_user_revokes_sessions_and_blocks_login(auth_service):
     assert auth_service.authenticate(result.token) is None
     with pytest.raises(AuthenticationError):
         auth_service.login("admin", "admin123456", "127.0.0.2")
+
+
+@pytest.mark.parametrize("mutation", ["change", "reset", "disable"])
+def test_inflight_old_password_login_cannot_survive_user_mutation(
+    auth_service,
+    session_factory,
+    monkeypatch,
+    mutation,
+):
+    bootstrap(auth_service)
+    user = auth_service.users.by_username("admin")
+    assert user is not None
+    login_verified = threading.Event()
+    mutation_complete = threading.Event()
+    real_verify_password = auth_service_module.verify_password
+
+    def coordinated_verify(password: str, encoded: str) -> bool:
+        verified = real_verify_password(password, encoded)
+        if threading.current_thread().name.startswith("old-password-login") and verified:
+            login_verified.set()
+            assert mutation_complete.wait(timeout=10)
+        return verified
+
+    monkeypatch.setattr(auth_service_module, "verify_password", coordinated_verify)
+
+    def old_password_login():
+        try:
+            return auth_service.login("admin", "admin123456", "127.0.0.9")
+        except AuthenticationError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="old-password-login") as executor:
+        future = executor.submit(old_password_login)
+        assert login_verified.wait(timeout=10)
+        if mutation == "change":
+            auth_service.change_password(user.id, "admin123456", "Replacement-123")
+        elif mutation == "reset":
+            auth_service.reset_password(user.id, "Replacement-123")
+        else:
+            auth_service.set_user_enabled(user.id, False)
+        mutation_complete.set()
+        login_result = future.result(timeout=10)
+
+    if mutation == "disable":
+        auth_service.set_user_enabled(user.id, True)
+
+    assert count_rows(session_factory, UserSession) == 0
+    if login_result is not None:
+        assert auth_service.authenticate(login_result.token) is None
 
 
 def test_rate_limiter_allows_five_failures_per_normalized_user_and_ip():

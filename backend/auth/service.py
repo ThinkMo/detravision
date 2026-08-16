@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.core.config import Settings
@@ -87,6 +88,20 @@ class AuthService:
         )
 
     def bootstrap_admin(self) -> None:
+        last_error: IntegrityError | None = None
+        for _attempt in range(2):
+            try:
+                self._bootstrap_admin_once()
+                return
+            except IntegrityError as exc:
+                last_error = exc
+                with self._session_factory() as session:
+                    if session.scalar(select(User.id).limit(1)) is not None:
+                        return
+        assert last_error is not None
+        raise last_error
+
+    def _bootstrap_admin_once(self) -> None:
         with self._session_factory.begin() as session:
             existing_id = session.scalar(
                 select(User.id).order_by(User.id).limit(1).with_for_update()
@@ -121,6 +136,20 @@ class AuthService:
             encoded = user.password_hash if user is not None else INVALID_PASSWORD_HASH
             password_valid = verify_password(password, encoded)
             if user is None or not user.enabled or not password_valid:
+                if not self.rate_limiter.record_failure_if_allowed(username, ip):
+                    raise LoginRateLimited("too many login attempts")
+                raise AuthenticationError("invalid username or password")
+
+            credential_lock = session.execute(
+                update(User)
+                .where(
+                    User.id == user.id,
+                    User.password_hash == encoded,
+                    User.enabled.is_(True),
+                )
+                .values(password_hash=encoded)
+            )
+            if credential_lock.rowcount != 1:
                 if not self.rate_limiter.record_failure_if_allowed(username, ip):
                     raise LoginRateLimited("too many login attempts")
                 raise AuthenticationError("invalid username or password")
