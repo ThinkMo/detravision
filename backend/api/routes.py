@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from backend.audit import audit_service, audited_admin, request_ip
 from backend.auth import AuthenticatedUser
 from backend.auth.dependencies import current_user, require_same_origin
+from backend.core.public_records import public_camera, public_event, public_model
 from backend.db import MissingAlarmGroupMemberError, Repository
 from backend.schemas import (
     AlarmGroupCreate,
@@ -97,7 +98,7 @@ def health(request: Request) -> dict[str, Any]:
 
 @protected_router.get("/cameras")
 def cameras(db: Repository = Depends(repository)) -> list[dict[str, Any]]:
-    return db.list_cameras()
+    return [public_camera(camera) for camera in db.list_cameras()]
 
 
 @protected_router.post("/cameras", status_code=status.HTTP_201_CREATED)
@@ -110,7 +111,7 @@ def create_camera(
     with audit_rejections(request, user, "create", "camera", None):
         camera = create_or_conflict(lambda: db.create_camera(payload.model_dump()))
     record_success(request, user, "create", "camera", camera["id"])
-    return camera
+    return public_camera(camera)
 
 
 @protected_router.patch("/cameras/{camera_id}")
@@ -126,7 +127,7 @@ def update_camera(
             db.update_camera(camera_id, payload.model_dump(exclude_unset=True))
         )
     record_success(request, user, "update", "camera", camera_id)
-    return camera
+    return public_camera(camera)
 
 
 @protected_router.delete("/cameras/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -282,13 +283,13 @@ def events(
     for value in (created_from, created_to):
         if value is not None and value.tzinfo is None:
             raise HTTPException(status_code=422, detail="event time filters must include a UTC offset")
-    return db.list_events(
+    return [public_event(event) for event in db.list_events(
         camera_id=camera_id,
         event_type=event_type,
         status=event_status,
         created_from=created_from.astimezone(timezone.utc) if created_from else None,
         created_to=created_to.astimezone(timezone.utc) if created_to else None,
-    )
+    )]
 
 
 @protected_router.patch("/events/{event_id}")
@@ -312,12 +313,12 @@ def update_event(
         event_id,
         details={"status": payload.status},
     )
-    return event
+    return public_event(event)
 
 
 @protected_router.get("/models")
 def models(db: Repository = Depends(repository)) -> list[dict[str, Any]]:
-    return db.list_models()
+    return [public_model(model) for model in db.list_models()]
 
 
 @protected_router.post("/models", status_code=status.HTTP_201_CREATED)
@@ -330,7 +331,7 @@ def create_model(
     with audit_rejections(request, user, "create", "model", None):
         model = create_or_conflict(lambda: db.create_model(payload.model_dump()))
     record_success(request, user, "create", "model", model["id"])
-    return model
+    return public_model(model)
 
 
 @protected_router.post("/models/{model_id}/activate")
@@ -343,7 +344,7 @@ def activate_model(
     with audit_rejections(request, user, "activate", "model", model_id):
         model = require(db.activate_model(model_id))
     record_success(request, user, "activate", "model", model_id)
-    return model
+    return public_model(model)
 
 
 router.include_router(protected_router)

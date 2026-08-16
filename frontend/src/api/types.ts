@@ -13,7 +13,7 @@ export interface CurrentUser {
 export interface Camera {
   id: number;
   name: string;
-  rtsp_url: string;
+  rtsp_configured: boolean;
   enabled: boolean;
   sample_fps: number;
   roi: number[][];
@@ -28,7 +28,7 @@ export interface Event {
   event_type: string;
   confidence: number;
   bbox: number[];
-  snapshot_path: string | null;
+  snapshot_url: string | null;
   status: "new" | "ack" | "closed";
   ack_by: number | null;
   ack_user_id: number | null;
@@ -73,7 +73,6 @@ export interface AlarmGroup {
 export interface ModelVersion {
   id: number;
   name: string;
-  file_path: string;
   runtime: "pt" | "onnx-fp32" | "tensorrt-fp16";
   classes: string[];
   map50: number | null;

@@ -7,7 +7,7 @@ import { EventsPage } from "./EventsPage";
 const camera = {
   id: 3,
   name: "装卸区",
-  rtsp_url: "rtsp://private.invalid/loading",
+  rtsp_configured: true,
   enabled: true,
   sample_fps: 1,
   roi: [],
@@ -22,7 +22,7 @@ const event = {
   event_type: "no_helmet",
   confidence: 0.92,
   bbox: [1, 2, 3, 4],
-  snapshot_path: "private/local/snapshot.jpg",
+  snapshot_url: "/api/events/9/snapshot",
   status: "new",
   ack_by: null,
   ack_user_id: null,
@@ -66,7 +66,7 @@ it("filters events without rendering private paths and acknowledges an event", a
   renderPage();
   expect(await screen.findByRole("heading", { name: "事件中心" })).toBeInTheDocument();
   expect(screen.getByRole("cell", { name: "装卸区" })).toBeInTheDocument();
-  expect(screen.queryByText(event.snapshot_path)).not.toBeInTheDocument();
+  expect(screen.queryByText("private/local/snapshot.jpg")).not.toBeInTheDocument();
 
   await userEvent.selectOptions(screen.getByLabelText("状态"), "new");
   await userEvent.click(screen.getByRole("button", { name: "筛选" }));

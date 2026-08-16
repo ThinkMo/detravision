@@ -78,7 +78,7 @@ def test_camera_routes_preserve_response_statuses_and_keys(api_app):
     assert created.status_code == 201
     camera = created.json()
     assert set(camera) == {
-        "id", "name", "rtsp_url", "enabled", "sample_fps", "roi", "detect_classes", "alarm_group_id", "created_at"
+        "id", "name", "rtsp_configured", "enabled", "sample_fps", "roi", "detect_classes", "alarm_group_id", "created_at"
     }
 
     updated = request(api_app, "PATCH", f"/api/cameras/{camera['id']}", json={"enabled": False})
@@ -159,14 +159,16 @@ def test_event_routes_preserve_response_statuses_and_keys(api_app):
 
     listed = request(api_app, "GET", "/api/events")
     assert listed.status_code == 200
-    assert listed.json() == [event]
-    assert set(event) == {
-        "id", "camera_id", "event_type", "confidence", "bbox", "snapshot_path", "status", "ack_by", "ack_user_id", "created_at"
+    public_event = {key: value for key, value in event.items() if key != "snapshot_path"}
+    public_event["snapshot_url"] = None
+    assert listed.json() == [public_event]
+    assert set(public_event) == {
+        "id", "camera_id", "event_type", "confidence", "bbox", "snapshot_url", "status", "ack_by", "ack_user_id", "created_at"
     }
 
     updated = request(api_app, "PATCH", f"/api/events/{event['id']}", json={"status": "ack"})
     assert updated.status_code == 200
-    assert set(updated.json()) == set(event)
+    assert set(updated.json()) == set(public_event)
     assert updated.json()["status"] == "ack"
 
 
@@ -184,7 +186,7 @@ def test_model_routes_preserve_response_statuses_and_keys(api_app):
     )
     assert created.status_code == 201
     model = created.json()
-    assert set(model) == {"id", "name", "file_path", "runtime", "classes", "map50", "is_active", "created_at"}
+    assert set(model) == {"id", "name", "runtime", "classes", "map50", "is_active", "created_at"}
 
     activated = request(api_app, "POST", f"/api/models/{model['id']}/activate")
     assert activated.status_code == 200

@@ -10,6 +10,7 @@ from typing import Any
 
 from backend.core.config import Settings
 from backend.core.notifier import FeishuNotifier
+from backend.core.public_records import public_event
 from backend.db import Repository
 from backend.engine import Detector, build_detector
 from backend.rules import RuleEngine
@@ -160,7 +161,10 @@ class RuntimeManager:
             self.created_events += 1
             self.notifier.send(record)
             if self.loop:
-                asyncio.run_coroutine_threadsafe(self.hub.broadcast("events", record), self.loop)
+                asyncio.run_coroutine_threadsafe(
+                    self.hub.broadcast("events", public_event(record)),
+                    self.loop,
+                )
 
     def _publish_preview(self, frame: Frame) -> None:
         if not self.loop:

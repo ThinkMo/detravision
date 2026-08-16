@@ -34,7 +34,7 @@ it("masks stored RTSP credentials and requires a named delete confirmation", asy
     if (path === "/api/cameras" && init?.method === "PATCH") return json([]);
     if (path === "/api/cameras/4" && init?.method === "DELETE") return new Response(null, { status: 204 });
     if (path === "/api/alarm-groups") return json([]);
-    if (path === "/api/cameras") return json([{ id: 4, name: "北门", rtsp_url: "rtsp://admin:secret@example.invalid/live", enabled: true, sample_fps: 1, roi: [], detect_classes: ["no_helmet"], alarm_group_id: null, created_at: "2026-08-16T00:00:00Z" }]);
+    if (path === "/api/cameras") return json([{ id: 4, name: "北门", rtsp_configured: true, enabled: true, sample_fps: 1, roi: [], detect_classes: ["no_helmet"], alarm_group_id: null, created_at: "2026-08-16T00:00:00Z" }]);
     throw new Error(`Unexpected request ${path}`);
   }));
 
@@ -77,7 +77,7 @@ it("shows model version and runtime before activation", async () => {
   let activated = false;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
-    const model = { id: 6, name: "helmet-v3", file_path: "D:\\private\\helmet.onnx", runtime: "onnx-fp32", classes: ["helmet", "no_helmet"], map50: 0.91, is_active: false, created_at: "2026-08-16T00:00:00Z" };
+    const model = { id: 6, name: "helmet-v3", runtime: "onnx-fp32", classes: ["helmet", "no_helmet"], map50: 0.91, is_active: false, created_at: "2026-08-16T00:00:00Z" };
     if (path === "/api/models/6/activate" && init?.method === "POST") { activated = true; return json({ ...model, is_active: true }); }
     if (path === "/api/models") return json([model]);
     throw new Error(`Unexpected request ${path}`);
@@ -87,7 +87,6 @@ it("shows model version and runtime before activation", async () => {
   await userEvent.click(await screen.findByRole("button", { name: "激活helmet-v3" }));
   const dialog = screen.getByRole("dialog", { name: "激活模型“helmet-v3”" });
   expect(dialog).toHaveTextContent("onnx-fp32");
-  expect(screen.queryByText(/D:\\private/)).not.toBeInTheDocument();
   await userEvent.click(within(dialog).getByRole("button", { name: "确认激活" }));
   await waitFor(() => expect(activated).toBe(true));
 });
@@ -102,11 +101,13 @@ it("shows a reset password only after success and clears it on close", async () 
 
   renderPage(<UsersPage />);
   expect(screen.queryByText("temp-Only-123")).not.toBeInTheDocument();
-  await userEvent.click(await screen.findByRole("button", { name: "重置operator的密码" }));
+  const resetTrigger = await screen.findByRole("button", { name: "重置operator的密码" });
+  await userEvent.click(resetTrigger);
   await userEvent.click(within(screen.getByRole("dialog", { name: "重置用户“operator”的密码" })).getByRole("button", { name: "确认重置" }));
   expect(await screen.findByText("temp-Only-123")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "我已复制，关闭" }));
+  await userEvent.keyboard("{Escape}");
   expect(screen.queryByText("temp-Only-123")).not.toBeInTheDocument();
+  expect(resetTrigger).toHaveFocus();
 });
 
 it("updates branding immediately and rejects an unsafe Logo locally", async () => {
@@ -164,7 +165,7 @@ it("keeps the people delete dialog open and announces a failed deletion", async 
 });
 
 it("announces model activation failure inside the confirmation dialog", async () => {
-  const model = { id: 6, name: "helmet-v3", file_path: "D:\\private\\helmet.onnx", runtime: "onnx-fp32", classes: ["helmet"], map50: 0.91, is_active: false, created_at: "2026-08-16T00:00:00Z" };
+  const model = { id: 6, name: "helmet-v3", runtime: "onnx-fp32", classes: ["helmet"], map50: 0.91, is_active: false, created_at: "2026-08-16T00:00:00Z" };
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
     if (path === "/api/models/6/activate" && init?.method === "POST") return json({ message: "模型加载失败" }, 409);

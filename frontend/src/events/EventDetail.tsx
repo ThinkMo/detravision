@@ -23,8 +23,8 @@ export function EventDetail({
   return (
     <aside className="event-detail" aria-label={`事件 #${event.id} 详情`}>
       <header><div><p>事件 #{event.id}</p><h2>{event.event_type}</h2></div><StatusBadge tone={status.tone}>{status.label}</StatusBadge></header>
-      {event.snapshot_path ? (
-        <img src={`/api/events/${event.id}/snapshot`} alt={`事件 #${event.id} 抓拍`} />
+      {event.snapshot_url ? (
+        <img src={event.snapshot_url} alt={`事件 #${event.id} 抓拍`} />
       ) : (
         <div className="event-detail__no-image">该事件没有抓拍图片</div>
       )}

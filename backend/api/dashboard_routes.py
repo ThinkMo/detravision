@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from backend.auth.dependencies import current_user, require_same_origin
+from backend.core.public_records import public_event
 from backend.db import Repository
 
 
@@ -16,7 +17,7 @@ class DashboardEvent(BaseModel):
     event_type: str
     confidence: float
     bbox: list[float]
-    snapshot_path: str | None
+    snapshot_url: str | None
     status: Literal["new", "ack", "closed"]
     ack_by: int | None
     ack_user_id: int | None
@@ -50,6 +51,9 @@ def dashboard_summary(request: Request) -> DashboardSummary:
         camera_active=camera_active,
         events_today=events_today,
         events_new=events_new,
-        recent_events=repository.list_recent_events(limit=8),
+        recent_events=[
+            public_event(event)
+            for event in repository.list_recent_events(limit=8)
+        ],
         runtime=request.app.state.runtime.status(),
     )

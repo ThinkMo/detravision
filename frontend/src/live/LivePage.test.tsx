@@ -8,7 +8,7 @@ const cameras = [
   {
     id: 1,
     name: "东门",
-    rtsp_url: "rtsp://private.invalid/east",
+    rtsp_configured: true,
     enabled: true,
     sample_fps: 1,
     roi: [],
@@ -19,7 +19,7 @@ const cameras = [
   {
     id: 2,
     name: "西门",
-    rtsp_url: "rtsp://private.invalid/west",
+    rtsp_configured: true,
     enabled: false,
     sample_fps: 1,
     roi: [],

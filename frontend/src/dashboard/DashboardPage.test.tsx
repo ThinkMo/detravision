@@ -43,7 +43,7 @@ it("shows live dashboard counts while hiding administrator navigation from users
               event_type: "no_helmet",
               confidence: 0.92,
               bbox: [1, 2, 3, 4],
-              snapshot_path: null,
+              snapshot_url: null,
               status: "new",
               ack_by: null,
               ack_user_id: null,
