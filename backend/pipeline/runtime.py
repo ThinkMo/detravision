@@ -108,12 +108,16 @@ class RuntimeManager:
             return
         try:
             replacement = build_detector(model["file_path"])
-        except Exception:
-            logger.exception("Unable to activate model %s; keeping current detector", model["id"])
+        except Exception as exc:
+            logger.error(
+                "model_activation_failed model_id=%s error_type=%s",
+                model["id"],
+                type(exc).__name__,
+            )
             return
         self.detector = replacement
         self.model_signature = signature
-        logger.info("Activated model %s from %s", model["id"], model["file_path"])
+        logger.info("model_activation_succeeded model_id=%s", model["id"])
 
     def _process(self) -> None:
         while not self.stop_event.is_set():

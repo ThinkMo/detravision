@@ -41,7 +41,7 @@ def create_or_conflict(create: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     try:
         return create()
     except IntegrityError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=409, detail="resource conflict") from exc
 
 
 def record_success(

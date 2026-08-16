@@ -170,6 +170,29 @@ def test_not_found_and_conflicting_business_mutations_are_audited(audit_app):
     ]
 
 
+def test_conflict_response_does_not_expose_database_diagnostics(audit_app):
+    """Catches SQL, parameters, docs URLs, or submitted values leaking through 409."""
+    sensitive_sentinel = "conflict-secret-sentinel"
+    client = authenticated_client(audit_app, "admin")
+    try:
+        payload = {"name": sensitive_sentinel, "person_ids": []}
+        assert client.post("/api/alarm-groups", json=payload).status_code == 201
+        response = client.post("/api/alarm-groups", json=payload)
+    finally:
+        client.close()
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "resource conflict"}
+    lowered = response.text.casefold()
+    for forbidden in (
+        sensitive_sentinel,
+        "insert into",
+        "parameters",
+        "sqlalche.me",
+    ):
+        assert forbidden not in lowered
+
+
 def test_audit_service_redacts_nested_secrets_urls_and_local_paths(audit_app):
     """Catches removal or bypass of recursive audit-detail sanitization."""
     _, _, session_factory, _ = audit_app
