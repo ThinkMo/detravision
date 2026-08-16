@@ -11,8 +11,9 @@ from typing import Any
 from backend.core.config import Settings
 from backend.core.notifier import FeishuNotifier
 from backend.core.public_records import public_event
+from backend.batch.annotate import annotate
 from backend.db import Repository
-from backend.engine import DetectorProvider, build_detector
+from backend.engine import Detection, DetectorProvider, build_detector
 from backend.rules import RuleEngine
 from backend.stream.capture import CaptureWorker
 from backend.stream.frame_queue import DropOldestQueue, Frame
@@ -157,7 +158,7 @@ class RuntimeManager:
             allowed_classes=camera["detect_classes"],
         )
         self.processed_frames += 1
-        self._publish_preview(frame)
+        self._publish_preview(frame, detections)
         for event in events:
             snapshot_path = self._save_snapshot(frame)
             record = self.repository.create_event(
@@ -178,13 +179,16 @@ class RuntimeManager:
                     self.loop,
                 )
 
-    def _publish_preview(self, frame: Frame) -> None:
+    def _publish_preview(self, frame: Frame, detections: list[Detection]) -> None:
         if not self.loop:
             return
         try:
             import cv2
 
-            ok, encoded = cv2.imencode(".jpg", frame.image, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
+            rendered = annotate(frame.image, detections)
+            ok, encoded = cv2.imencode(
+                ".jpg", rendered, [int(cv2.IMWRITE_JPEG_QUALITY), 75]
+            )
             if ok:
                 asyncio.run_coroutine_threadsafe(
                     self.hub.broadcast_bytes(f"live:{frame.camera_id}", encoded.tobytes()), self.loop

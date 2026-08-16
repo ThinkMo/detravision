@@ -165,6 +165,25 @@ def test_annotation_is_deterministic_and_clamps_out_of_bounds_boxes():
     assert not np.array_equal(first, image)
 
 
+def test_annotation_prioritizes_helmet_violation_with_explicit_styles():
+    image = np.full((48, 76, 3), 255, dtype=np.uint8)
+    detections = [
+        Detection("no_helmet", 0.95, (4, 20, 20, 38)),
+        Detection("person", 0.80, (28, 20, 44, 38)),
+        Detection("helmet", 0.88, (52, 20, 68, 38)),
+    ]
+
+    annotated = annotate(image, detections)
+
+    assert tuple(annotated[24, 4]) == (38, 38, 220)
+    assert tuple(annotated[24, 7]) == (38, 38, 220)
+    assert tuple(annotated[24, 8]) == (255, 255, 255)
+    assert tuple(annotated[24, 28]) == (138, 112, 86)
+    assert tuple(annotated[24, 30]) == (255, 255, 255)
+    assert tuple(annotated[24, 52]) == (102, 138, 76)
+    assert tuple(annotated[24, 54]) == (255, 255, 255)
+
+
 def test_app_startup_recovery_uses_database_active_model_before_batch_claim(
     tmp_path,
     monkeypatch,
