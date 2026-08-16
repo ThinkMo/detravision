@@ -9,6 +9,7 @@ import { DashboardPage } from "../dashboard/DashboardPage";
 import { EventsPage } from "../events/EventsPage";
 import { AppShell } from "../layout/AppShell";
 import { LivePage } from "../live/LivePage";
+import { BatchPage } from "../batch/BatchPage";
 import { DevicesPage } from "../admin/devices/DevicesPage";
 import { ModelsPage } from "../admin/models/ModelsPage";
 import { SettingsHubPage } from "../admin/settings/SettingsHubPage";
@@ -36,6 +37,8 @@ export function App() {
                   <Route path="/dashboard" element={<DashboardPage />} />
                   <Route path="/live" element={<LivePage />} />
                   <Route path="/events" element={<EventsPage />} />
+                  <Route path="/batch" element={<BatchPage />} />
+                  <Route path="/batch/:jobId" element={<BatchPage />} />
                   <Route element={<AdminRoute />}>
                     <Route path="/admin" element={<Navigate to="/admin/devices" replace />} />
                     <Route path="/admin/devices" element={<DevicesPage />} />

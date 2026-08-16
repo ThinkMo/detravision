@@ -98,6 +98,51 @@ export interface UserRecord extends CurrentUser {
   updated_at: string;
 }
 
+export type BatchJobStatus = "queued" | "processing" | "completed" | "partial_failed" | "failed";
+export type BatchImageStatus = "queued" | "processing" | "completed" | "failed";
+
+export interface BatchDetection {
+  label: string;
+  confidence: number;
+  bbox: number[];
+}
+
+export interface BatchJob {
+  id: number;
+  user_id: number;
+  status: BatchJobStatus;
+  image_total: number;
+  success_count: number;
+  failure_count: number;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BatchImageResult {
+  id: number;
+  display_name: string;
+  status: BatchImageStatus;
+  error_code: string | null;
+  error_message: string | null;
+  model_version_id: number | null;
+  detections: BatchDetection[];
+  result_url: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BatchJobDetail extends BatchJob {
+  images: BatchImageResult[];
+}
+
+export interface BatchJobPage {
+  items: BatchJob[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 export interface ApiErrorBody {
   code?: string;
   message?: string;
