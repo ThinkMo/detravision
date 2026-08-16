@@ -1,3 +1,3 @@
-from .repositories import Repository
+from .repositories import MissingAlarmGroupMemberError, Repository
 
-__all__ = ["Repository"]
+__all__ = ["MissingAlarmGroupMemberError", "Repository"]

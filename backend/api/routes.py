@@ -11,9 +11,10 @@ from sqlalchemy.exc import IntegrityError
 from backend.audit import audit_service, audited_admin, request_ip
 from backend.auth import AuthenticatedUser
 from backend.auth.dependencies import current_user, require_same_origin
-from backend.db import Repository
+from backend.db import MissingAlarmGroupMemberError, Repository
 from backend.schemas import (
     AlarmGroupCreate,
+    AlarmGroupUpdate,
     CameraCreate,
     CameraUpdate,
     EventUpdate,
@@ -218,6 +219,55 @@ def create_alarm_group(
         group["members"] = db.group_members(group["id"])
     record_success(request, user, "create", "alarm_group", group["id"])
     return group
+
+
+@protected_router.patch("/alarm-groups/{group_id}")
+def update_alarm_group(
+    group_id: int,
+    payload: AlarmGroupUpdate,
+    request: Request,
+    db: Repository = Depends(repository),
+    user: AuthenticatedUser = Depends(audited_admin("update", "alarm_group")),
+) -> dict[str, Any]:
+    with audit_rejections(request, user, "update", "alarm_group", group_id):
+        try:
+            group = db.update_alarm_group(
+                group_id,
+                name=payload.name,
+                person_ids=payload.person_ids,
+            )
+        except MissingAlarmGroupMemberError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="person id does not exist",
+            ) from exc
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="resource conflict",
+            ) from exc
+        group = require(group)
+    record_success(request, user, "update", "alarm_group", group_id)
+    return group
+
+
+@protected_router.delete(
+    "/alarm-groups/{group_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_alarm_group(
+    group_id: int,
+    request: Request,
+    db: Repository = Depends(repository),
+    user: AuthenticatedUser = Depends(audited_admin("delete", "alarm_group")),
+) -> None:
+    with audit_rejections(request, user, "delete", "alarm_group", group_id):
+        result = db.delete_alarm_group_if_unused(group_id)
+        if result == "missing":
+            raise HTTPException(status_code=404, detail="alarm group not found")
+        if result == "in_use":
+            raise HTTPException(status_code=409, detail="resource_in_use")
+    record_success(request, user, "delete", "alarm_group", group_id)
 
 
 @protected_router.get("/events")

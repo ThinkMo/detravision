@@ -46,6 +46,12 @@ class AlarmGroupCreate(BaseModel):
     person_ids: list[int] = Field(default_factory=list)
 
 
+class AlarmGroupUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    person_ids: list[int] | None = None
+
+
 class EventUpdate(BaseModel):
     status: Literal["new", "ack", "closed"]
     ack_by: int | None = None

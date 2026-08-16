@@ -9,14 +9,14 @@ import { DashboardPage } from "../dashboard/DashboardPage";
 import { EventsPage } from "../events/EventsPage";
 import { AppShell } from "../layout/AppShell";
 import { LivePage } from "../live/LivePage";
+import { DevicesPage } from "../admin/devices/DevicesPage";
+import { ModelsPage } from "../admin/models/ModelsPage";
+import { SettingsHubPage } from "../admin/settings/SettingsHubPage";
+import "../admin/admin.css";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false } },
 });
-
-function AdminPage() {
-  return <main><h1>系统管理</h1></main>;
-}
 
 function NotFoundPage() {
   return <main className="status-page"><p className="status-page__code">404</p><h1>页面不存在</h1></main>;
@@ -37,7 +37,10 @@ export function App() {
                   <Route path="/live" element={<LivePage />} />
                   <Route path="/events" element={<EventsPage />} />
                   <Route element={<AdminRoute />}>
-                    <Route path="/admin" element={<AdminPage />} />
+                    <Route path="/admin" element={<Navigate to="/admin/devices" replace />} />
+                    <Route path="/admin/devices" element={<DevicesPage />} />
+                    <Route path="/admin/models" element={<ModelsPage />} />
+                    <Route path="/admin/settings" element={<SettingsHubPage />} />
                   </Route>
                 </Route>
               </Route>

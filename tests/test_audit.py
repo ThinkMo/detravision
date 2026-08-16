@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -388,3 +389,33 @@ def test_audit_log_endpoint_is_admin_only_and_returns_sanitized_rows(audit_app):
             json.loads(row["details"])
     finally:
         client.close()
+
+
+def test_audit_log_endpoint_filters_actor_action_outcome_and_utc_range(audit_app):
+    """Catches the console audit filters being accepted but silently ignored."""
+    _, _, session_factory, _ = audit_app
+    with session_factory.begin() as session:
+        session.add_all(
+            [
+                AuditLog(actor_id=1, action="update", resource_type="camera", resource_id="4", outcome="success", created_at=datetime(2026, 8, 15, 8, tzinfo=timezone.utc)),
+                AuditLog(actor_id=2, action="update", resource_type="event", resource_id="5", outcome="success", created_at=datetime(2026, 8, 16, 8, tzinfo=timezone.utc)),
+                AuditLog(actor_id=1, action="login", resource_type="session", outcome="rejected", created_at=datetime(2026, 8, 16, 9, tzinfo=timezone.utc)),
+            ]
+        )
+    client = authenticated_client(audit_app, "admin")
+    try:
+        response = client.get(
+            "/api/audit-logs",
+            params={
+                "actor_id": 1,
+                "action": "update",
+                "outcome": "success",
+                "created_from": "2026-08-15T00:00:00Z",
+                "created_to": "2026-08-15T23:59:59Z",
+            },
+        )
+    finally:
+        client.close()
+
+    assert response.status_code == 200
+    assert [(row["resource_type"], row["resource_id"]) for row in response.json()] == [("camera", "4")]

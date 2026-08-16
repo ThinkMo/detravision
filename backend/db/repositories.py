@@ -11,6 +11,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from .models import AlarmGroup, Camera, DetectionEvent, ModelVersion, Person, alarm_group_member
 
 
+class MissingAlarmGroupMemberError(ValueError):
+    """Raised before committing a group update that references unknown people."""
+
+
 def utc_iso(value: datetime) -> str:
     return value.isoformat()
 
@@ -139,8 +143,68 @@ class Repository:
     def create_alarm_group(self, data: dict[str, Any]) -> dict[str, Any]:
         return self._create(AlarmGroup, data, alarm_group_dict)
 
+    def update_alarm_group(
+        self,
+        group_id: int,
+        *,
+        name: str | None,
+        person_ids: list[int] | None,
+    ) -> dict[str, Any] | None:
+        with self.session_factory.begin() as session:
+            row = session.get(AlarmGroup, group_id)
+            if row is None:
+                return None
+            if person_ids is not None:
+                unique_ids = list(dict.fromkeys(person_ids))
+                found_ids = set(
+                    session.scalars(select(Person.id).where(Person.id.in_(unique_ids)))
+                ) if unique_ids else set()
+                if found_ids != set(unique_ids):
+                    raise MissingAlarmGroupMemberError("person id does not exist")
+                session.execute(
+                    alarm_group_member.delete().where(
+                        alarm_group_member.c.group_id == group_id
+                    )
+                )
+                if unique_ids:
+                    session.execute(
+                        alarm_group_member.insert(),
+                        [
+                            {"group_id": group_id, "person_id": person_id}
+                            for person_id in unique_ids
+                        ],
+                    )
+            if name is not None:
+                row.name = name
+            session.flush()
+            members = session.scalars(
+                select(Person)
+                .join(
+                    alarm_group_member,
+                    Person.id == alarm_group_member.c.person_id,
+                )
+                .where(alarm_group_member.c.group_id == group_id)
+                .order_by(Person.id)
+            ).all()
+            return {**alarm_group_dict(row), "members": [person_dict(item) for item in members]}
+
     def delete_alarm_group(self, group_id: int) -> bool:
         return self._delete(AlarmGroup, group_id)
+
+    def delete_alarm_group_if_unused(self, group_id: int) -> str:
+        with self.session_factory.begin() as session:
+            row = session.get(AlarmGroup, group_id)
+            if row is None:
+                return "missing"
+            camera_id = session.scalar(
+                select(Camera.id)
+                .where(Camera.alarm_group_id == group_id)
+                .limit(1)
+            )
+            if camera_id is not None:
+                return "in_use"
+            session.delete(row)
+            return "deleted"
 
     def replace_group_members(self, group_id: int, person_ids: list[int]) -> None:
         with self.session_factory.begin() as session:

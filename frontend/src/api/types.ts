@@ -93,6 +93,12 @@ export interface AuditLog {
   created_at: string;
 }
 
+export interface UserRecord extends CurrentUser {
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ApiErrorBody {
   code?: string;
   message?: string;
