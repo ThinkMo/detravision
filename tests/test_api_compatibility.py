@@ -5,8 +5,11 @@ import pytest
 from fastapi import FastAPI
 
 from backend.api import routes
+from backend.auth import AuthenticatedUser
+from backend.auth.dependencies import current_user
 from backend.db import Repository
 from backend.db.migrate import run_migrations
+from backend.db.models import User
 from backend.db.session import create_engine_from_url, create_session_factory
 
 
@@ -15,12 +18,31 @@ def api_app(tmp_path):
     database_url = "sqlite:///" + (tmp_path / "api.db").as_posix()
     run_migrations(database_url)
     engine = create_engine_from_url(database_url)
+    session_factory = create_session_factory(engine)
+    with session_factory.begin() as session:
+        session.add(
+            User(
+                username="compatibility-admin",
+                password_hash="unused-by-dependency-override",
+                role="admin",
+                enabled=True,
+                must_change_password=False,
+            )
+        )
     app = FastAPI()
     app.include_router(routes.router)
-    app.state.repository = Repository(create_session_factory(engine))
+    app.state.repository = Repository(session_factory)
+    app.state.session_factory = session_factory
+    app.dependency_overrides[current_user] = lambda: AuthenticatedUser(
+        id=1,
+        username="compatibility-admin",
+        role="admin",
+        must_change_password=False,
+    )
     try:
         yield app
     finally:
+        app.dependency_overrides.clear()
         engine.dispose()
 
 

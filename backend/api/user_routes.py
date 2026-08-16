@@ -6,7 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from backend.audit import audit_service, audited_admin, request_ip
 from backend.auth import (
+    AuthenticatedUser,
     AuthenticationError,
     FinalAdminError,
     PasswordValidationError,
@@ -25,7 +27,7 @@ from backend.schemas import (
 router = APIRouter(
     prefix="/api/users",
     tags=["users"],
-    dependencies=[Depends(require_same_origin), Depends(require_admin)],
+    dependencies=[Depends(require_same_origin)],
 )
 
 
@@ -46,15 +48,30 @@ def _session_factory(request: Request):
 
 
 @router.get("", response_model=list[UserResponse])
-def list_users(request: Request):
+def list_users(
+    request: Request,
+    _user: AuthenticatedUser = Depends(require_admin),
+):
     with _session_factory(request)() as session:
         users = session.scalars(select(User).order_by(User.id)).all()
         return [_user_response(user) for user in users]
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=UserResponse)
-def create_user(payload: UserCreate, request: Request):
+def create_user(
+    payload: UserCreate,
+    request: Request,
+    actor: AuthenticatedUser = Depends(audited_admin("create", "user")),
+):
     if payload.password.casefold() == payload.username.casefold():
+        audit_service(request).record(
+            actor.id,
+            "create",
+            "user",
+            None,
+            "rejected",
+            request_ip(request),
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="password must not equal the username",
@@ -72,15 +89,37 @@ def create_user(payload: UserCreate, request: Request):
             session.flush()
             result = _user_response(user)
     except IntegrityError as exc:
+        audit_service(request).record(
+            actor.id,
+            "create",
+            "user",
+            None,
+            "rejected",
+            request_ip(request),
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="username already exists",
         ) from exc
+    audit_service(request).record(
+        actor.id,
+        "create",
+        "user",
+        result["id"],
+        "success",
+        request_ip(request),
+        details={"role": payload.role},
+    )
     return result
 
 
 @router.patch("/{user_id}", response_model=UserResponse)
-def update_user(user_id: int, payload: UserUpdate, request: Request):
+def update_user(
+    user_id: int,
+    payload: UserUpdate,
+    request: Request,
+    actor: AuthenticatedUser = Depends(audited_admin("update", "user")),
+):
     try:
         user = auth_service(request).update_user(
             user_id,
@@ -88,31 +127,84 @@ def update_user(user_id: int, payload: UserUpdate, request: Request):
             enabled=payload.enabled,
         )
     except AuthenticationError as exc:
+        audit_service(request).record(
+            actor.id,
+            "update",
+            "user",
+            user_id,
+            "rejected",
+            request_ip(request),
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="user not found",
         ) from exc
     except FinalAdminError as exc:
+        audit_service(request).record(
+            actor.id,
+            "update",
+            "user",
+            user_id,
+            "rejected",
+            request_ip(request),
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="cannot remove the final enabled administrator",
         ) from exc
+    audit_service(request).record(
+        actor.id,
+        "update",
+        "user",
+        user_id,
+        "success",
+        request_ip(request),
+        details=payload.model_dump(exclude_unset=True),
+    )
     return _user_response(user)
 
 
 @router.post("/{user_id}/reset-password", response_model=TemporaryPasswordResponse)
-def reset_password(user_id: int, request: Request):
+def reset_password(
+    user_id: int,
+    request: Request,
+    actor: AuthenticatedUser = Depends(audited_admin("password_reset", "user")),
+):
     temporary_password = secrets.token_urlsafe(12)
     try:
         auth_service(request).reset_password(user_id, temporary_password)
     except AuthenticationError as exc:
+        audit_service(request).record(
+            actor.id,
+            "password_reset",
+            "user",
+            user_id,
+            "rejected",
+            request_ip(request),
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="user not found",
         ) from exc
     except PasswordValidationError as exc:
+        audit_service(request).record(
+            actor.id,
+            "password_reset",
+            "user",
+            user_id,
+            "rejected",
+            request_ip(request),
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
+    audit_service(request).record(
+        actor.id,
+        "password_reset",
+        "user",
+        user_id,
+        "success",
+        request_ip(request),
+    )
     return {"temporary_password": temporary_password}
