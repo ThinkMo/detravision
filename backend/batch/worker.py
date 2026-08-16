@@ -55,6 +55,7 @@ class BatchWorker:
 
     def stop(self) -> None:
         self._stop_event.set()
+        self._provider.wake_waiters()
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=max(1.0, self._poll_interval * 2))
@@ -63,6 +64,8 @@ class BatchWorker:
     def process_available(self) -> int:
         processed = 0
         while not self._stop_event.is_set():
+            if not self._provider.available:
+                break
             claimed = self._repository.claim_next_image()
             if claimed is None:
                 break
@@ -72,6 +75,11 @@ class BatchWorker:
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
+            if not self._provider.wait_until_available(
+                self._stop_event,
+                timeout=self._poll_interval,
+            ):
+                continue
             processed = self.process_available()
             if not processed:
                 self._stop_event.wait(self._poll_interval)
@@ -163,4 +171,3 @@ class BatchWorker:
             "confidence": detection.confidence,
             "bbox": list(detection.bbox),
         }
-

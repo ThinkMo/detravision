@@ -50,6 +50,28 @@ class DetectorProvider:
             self._condition.wait_for(lambda: not self._active)
             self._detector = detector
             self._model_version_id = model_version_id
+            self._condition.notify_all()
+
+    def wait_until_available(
+        self,
+        stop_event: threading.Event,
+        *,
+        timeout: float | None = None,
+    ) -> bool:
+        """Wait without spinning until a usable detector is installed or stopped."""
+        with self._condition:
+            self._condition.wait_for(
+                lambda: stop_event.is_set()
+                or not isinstance(self._detector, NoopDetector),
+                timeout=timeout,
+            )
+            return not stop_event.is_set() and not isinstance(
+                self._detector, NoopDetector
+            )
+
+    def wake_waiters(self) -> None:
+        with self._condition:
+            self._condition.notify_all()
 
     @property
     def available(self) -> bool:

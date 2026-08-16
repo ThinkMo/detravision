@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, delete, func, select, update
+from sqlalchemy import case, delete, exists, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.db.models import BatchImage, BatchJob
@@ -23,6 +24,12 @@ from .types import (
 
 class BatchImageStateError(RuntimeError):
     """The requested result transition is invalid or the image is missing."""
+
+
+@dataclass(frozen=True, slots=True)
+class ExpiredJobCleanupResult:
+    status: str
+    failed_keys: tuple[str, ...] = ()
 
 
 class BatchRepository:
@@ -135,10 +142,31 @@ class BatchRepository:
         now = self._now()
         for _attempt in range(2):
             with self._session_factory.begin() as session:
+                job_id = session.scalar(
+                    select(BatchJob.id)
+                    .where(
+                        BatchJob.expires_at > now,
+                        exists(
+                            select(BatchImage.id).where(
+                                BatchImage.job_id == BatchJob.id,
+                                BatchImage.status == "queued",
+                            )
+                        ),
+                    )
+                    .order_by(BatchJob.created_at, BatchJob.id)
+                    .with_for_update()
+                    .limit(1)
+                )
+                if job_id is None:
+                    return None
                 image_id = session.scalar(
                     select(BatchImage.id)
-                    .where(BatchImage.status == "queued")
+                    .where(
+                        BatchImage.job_id == job_id,
+                        BatchImage.status == "queued",
+                    )
                     .order_by(BatchImage.created_at, BatchImage.id)
+                    .with_for_update()
                     .limit(1)
                 )
                 if image_id is None:
@@ -148,6 +176,12 @@ class BatchRepository:
                     .where(
                         BatchImage.id == image_id,
                         BatchImage.status == "queued",
+                        exists(
+                            select(BatchJob.id).where(
+                                BatchJob.id == job_id,
+                                BatchJob.expires_at > now,
+                            )
+                        ),
                     )
                     .values(status="processing", updated_at=now)
                 )
@@ -181,6 +215,13 @@ class BatchRepository:
             )
             if job_id is None:
                 raise BatchImageStateError("batch image must be processing")
+            locked_job_id = session.scalar(
+                select(BatchJob.id)
+                .where(BatchJob.id == job_id)
+                .with_for_update()
+            )
+            if locked_job_id is None:
+                raise BatchImageStateError("batch image must be processing")
             changed = session.execute(
                 update(BatchImage)
                 .where(
@@ -210,6 +251,13 @@ class BatchRepository:
                 select(BatchImage.job_id).where(BatchImage.id == image_id)
             )
             if job_id is None:
+                raise BatchImageStateError("batch image must be processing")
+            locked_job_id = session.scalar(
+                select(BatchJob.id)
+                .where(BatchJob.id == job_id)
+                .with_for_update()
+            )
+            if locked_job_id is None:
                 raise BatchImageStateError("batch image must be processing")
             changed = session.execute(
                 update(BatchImage)
@@ -276,17 +324,66 @@ class BatchRepository:
                 )
             return expired
 
-    def delete_expired_job(self, job_id: int, *, now: datetime) -> bool:
-        """Delete one still-expired job after its opaque storage keys are removed."""
+    def cleanup_expired_job(
+        self,
+        job_id: int,
+        *,
+        now: datetime,
+        delete_key: Callable[[str], None],
+    ) -> ExpiredJobCleanupResult:
+        """Lock, re-read, clean, and delete one expired job atomically.
+
+        Lock order is always the parent BatchJob, then its BatchImage rows, then
+        storage I/O. Claim and terminal writes take the same database lock order.
+        """
         self._require_aware(now)
         with self._session_factory.begin() as session:
-            deleted = session.execute(
-                delete(BatchJob).where(
-                    BatchJob.id == job_id,
-                    BatchJob.expires_at <= now,
+            # SQLite ignores SELECT FOR UPDATE. This no-op write obtains its
+            # database write lock before current image state and keys are read.
+            session.execute(
+                update(BatchJob)
+                .where(BatchJob.id == job_id, BatchJob.expires_at <= now)
+                .values(updated_at=BatchJob.updated_at)
+            )
+            job = session.scalar(
+                select(BatchJob)
+                .where(BatchJob.id == job_id, BatchJob.expires_at <= now)
+                .with_for_update()
+            )
+            if job is None:
+                return ExpiredJobCleanupResult("missing")
+            images = session.scalars(
+                select(BatchImage)
+                .where(BatchImage.job_id == job_id)
+                .order_by(BatchImage.id)
+                .with_for_update()
+            ).all()
+            if any(image.status == "processing" for image in images):
+                return ExpiredJobCleanupResult("busy")
+
+            keys = tuple(
+                dict.fromkeys(
+                    key
+                    for image in images
+                    for key in (image.source_key, image.annotated_key)
+                    if key is not None
                 )
             )
-            return deleted.rowcount == 1
+            failed_keys: list[str] = []
+            for key in keys:
+                try:
+                    delete_key(key)
+                except FileNotFoundError:
+                    pass
+                except Exception:
+                    failed_keys.append(key)
+            if failed_keys:
+                return ExpiredJobCleanupResult(
+                    "file_failed",
+                    tuple(failed_keys),
+                )
+            session.execute(delete(BatchJob).where(BatchJob.id == job_id))
+            return ExpiredJobCleanupResult("deleted")
 
     @staticmethod
     def _recompute_job(session: Session, job_id: int, now: datetime) -> None:

@@ -18,6 +18,7 @@ class CleanupSummary:
     scanned_jobs: int = 0
     deleted_jobs: int = 0
     failed_jobs: int = 0
+    skipped_jobs: int = 0
 
 
 class RetentionCleaner:
@@ -61,32 +62,26 @@ class RetentionCleaner:
         expired = self._repository.list_expired(now)
         deleted_jobs = 0
         failed_jobs = 0
+        skipped_jobs = 0
         for job in expired:
-            failed = False
-            keys = [
-                key
-                for image in job.images
-                for key in (image.source_key, image.annotated_key)
-                if key is not None
-            ]
-            for key in dict.fromkeys(keys):
-                try:
-                    self._storage.delete(key)
-                except FileNotFoundError:
-                    pass
-                except Exception:
-                    failed = True
-                    logger.warning(
-                        "batch_retention_delete_failed job_id=%s key=%s error_code=storage_delete_failed",
-                        job.id,
-                        key,
-                    )
-            if failed:
-                failed_jobs += 1
-                continue
             try:
-                if self._repository.delete_expired_job(job.id, now=now):
+                result = self._repository.cleanup_expired_job(
+                    job.id,
+                    now=now,
+                    delete_key=self._storage.delete,
+                )
+                if result.status == "deleted":
                     deleted_jobs += 1
+                elif result.status == "busy":
+                    skipped_jobs += 1
+                elif result.status == "file_failed":
+                    failed_jobs += 1
+                    for key in result.failed_keys:
+                        logger.warning(
+                            "batch_retention_delete_failed job_id=%s key=%s error_code=storage_delete_failed",
+                            job.id,
+                            key,
+                        )
             except Exception:
                 failed_jobs += 1
                 logger.warning(
@@ -97,6 +92,7 @@ class RetentionCleaner:
             scanned_jobs=len(expired),
             deleted_jobs=deleted_jobs,
             failed_jobs=failed_jobs,
+            skipped_jobs=skipped_jobs,
         )
 
     def _run(self) -> None:

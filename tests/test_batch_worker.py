@@ -2,21 +2,25 @@ from __future__ import annotations
 
 import io
 import asyncio
+import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import cv2
 import numpy as np
 import pytest
 
-from backend.batch import BatchRepository, PendingImage, annotate
+from backend.batch import BatchRepository, PendingImage, RetentionCleaner, annotate
 from backend.batch.worker import BatchWorker
 from backend import main as main_module
 from backend.core.config import Settings
 from backend.db.migrate import run_migrations
 from backend.db.models import ModelVersion, User
 from backend.db.session import create_engine_from_url, create_session_factory
-from backend.engine import Detection, DetectorProvider
+from backend.engine import Detection, DetectorProvider, NoopDetector
+from backend.pipeline import RuntimeManager
+from backend.pipeline import runtime as runtime_module
+from backend.ws import EventHub
 from backend.storage import LocalFileStorage
 
 
@@ -27,6 +31,17 @@ class FakeDetector:
     def predict(self, image: np.ndarray) -> list[Detection]:
         height, width = image.shape[:2]
         return [Detection("helmet", 0.916, (-2, -1, width + 3, height + 4))]
+
+
+class BlockingFakeDetector(FakeDetector):
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def predict(self, image: np.ndarray) -> list[Detection]:
+        self.started.set()
+        assert self.release.wait(timeout=2)
+        return super().predict(image)
 
 
 @pytest.fixture
@@ -212,3 +227,102 @@ def test_app_startup_recovery_uses_database_active_model_before_batch_claim(
     image = repository.list_images(job.id)[0]
     assert image.status == "completed"
     assert image.model_version_id == model_id
+
+
+def test_unavailable_model_leaves_recovered_job_queued_then_wakes_on_replace(
+    batch_context,
+    monkeypatch,
+):
+    repository, storage, original_worker, owner_id = batch_context
+    original_worker.stop()
+    job = _create_job(repository, storage, owner_id, [_jpeg_bytes()])
+    assert repository.claim_next_image() is not None
+    provider = DetectorProvider(NoopDetector(), model_version_id=None)
+    worker = BatchWorker(repository, provider, storage, poll_interval=10)
+
+    class FailingActiveModelRepository:
+        def get_active_model(self):
+            return {"id": 8, "file_path": "opaque/broken.onnx"}
+
+    monkeypatch.setattr(
+        runtime_module,
+        "build_detector",
+        lambda _path: (_ for _ in ()).throw(RuntimeError("load failed")),
+    )
+    runtime = RuntimeManager(
+        Settings(enable_runtime=False),
+        FailingActiveModelRepository(),
+        provider,
+        EventHub(),
+    )
+    asyncio.run(runtime.start())
+
+    worker.start()
+    time.sleep(0.1)
+    assert repository.get_job(job.id).status == "queued"
+    assert repository.list_images(job.id)[0].status == "queued"
+
+    provider.replace(FakeDetector(), model_version_id=8)
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        if repository.get_job(job.id).status == "completed":
+            break
+        time.sleep(0.01)
+    worker.stop()
+
+    assert repository.get_job(job.id).status == "completed"
+    assert repository.list_images(job.id)[0].model_version_id == 8
+
+
+def test_unavailable_worker_shutdown_interrupts_long_model_wait(batch_context):
+    repository, storage, original_worker, _owner_id = batch_context
+    original_worker.stop()
+    worker = BatchWorker(
+        repository,
+        DetectorProvider(NoopDetector(), model_version_id=None),
+        storage,
+        poll_interval=10,
+    )
+    worker.start()
+    time.sleep(0.05)
+
+    started = time.monotonic()
+    worker.stop()
+
+    assert time.monotonic() - started < 0.5
+
+
+def test_cleanup_and_processing_worker_coordinate_without_orphaned_output(
+    batch_context,
+):
+    repository, storage, original_worker, owner_id = batch_context
+    original_worker.stop()
+    detector = BlockingFakeDetector()
+    provider = DetectorProvider(detector, model_version_id=8)
+    worker = BatchWorker(repository, provider, storage, poll_interval=0.01)
+    cleaner = RetentionCleaner(repository, storage)
+    job = _create_job(repository, storage, owner_id, [_jpeg_bytes()])
+
+    worker.start()
+    assert detector.started.wait(timeout=1)
+    first_cleanup = cleaner.run_once(now=NOW + timedelta(days=30))
+
+    assert first_cleanup.skipped_jobs == 1
+    assert repository.get_job(job.id) is not None
+    detector.release.set()
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        if repository.get_job(job.id).status == "completed":
+            break
+        time.sleep(0.01)
+    worker.stop()
+    image = repository.list_images(job.id)[0]
+    assert image.annotated_key is not None
+
+    second_cleanup = cleaner.run_once(now=NOW + timedelta(days=30))
+
+    assert second_cleanup.deleted_jobs == 1
+    assert repository.get_job(job.id) is None
+    for key in (image.source_key, image.annotated_key):
+        with pytest.raises(FileNotFoundError):
+            storage.open(key)

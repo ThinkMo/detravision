@@ -230,3 +230,13 @@ def test_list_expired_returns_file_keys_and_only_expired_jobs(batch_context):
     assert [(image.source_key, image.annotated_key) for image in expired[0].images] == [
         ("batch-source/a.jpg", None)
     ]
+
+
+def test_claim_never_consumes_image_at_or_after_job_expiry(batch_context):
+    repository, _factory, owner_id, _other_id = batch_context
+    job = repository.create_job(owner_id, [pending("expired.jpg")])
+    repository._clock = lambda: NOW + timedelta(days=30)
+
+    assert repository.claim_next_image() is None
+    assert repository.get_job(job.id).status == "queued"
+    assert repository.list_images(job.id)[0].status == "queued"
