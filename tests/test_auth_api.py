@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 from fastapi import Depends
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from backend.auth import AuthenticatedUser, AuthService, hash_password, verify_password
 from backend.auth.dependencies import current_user, require_admin
@@ -296,8 +296,62 @@ def test_final_enabled_administrator_cannot_be_disabled_or_demoted(auth_api, upd
         assert me.json()["role"] == "admin"
 
 
-def test_concurrent_updates_preserve_one_enabled_administrator(auth_api):
-    """Catches concurrent removals each relying on a stale view of the other admin."""
+def test_vulnerable_check_then_update_schedule_removes_all_administrators(auth_api):
+    """Characterizes the stale-read schedule the service lock must prevent."""
+    _, _, session_factory = auth_api
+    with session_factory.begin() as session:
+        session.add(
+            User(
+                username="second.admin",
+                password_hash=hash_password("Second-admin-123"),
+                role="admin",
+                enabled=True,
+                must_change_password=False,
+            )
+        )
+
+    both_invariant_reads_complete = threading.Barrier(2)
+    first_write_complete = threading.Event()
+
+    def vulnerable_update(user_id: int, *, role=None, enabled=None) -> None:
+        with session_factory() as session:
+            observed_admin_ids = session.scalars(
+                select(User.id)
+                .where(User.role == "admin", User.enabled.is_(True))
+                .order_by(User.id)
+            ).all()
+        both_invariant_reads_complete.wait(timeout=10)
+        assert observed_admin_ids == [1, 2]
+
+        if user_id == 2:
+            assert first_write_complete.wait(timeout=10)
+        with session_factory.begin() as session:
+            user = session.get(User, user_id)
+            assert user is not None
+            if role is not None:
+                user.role = role
+            if enabled is not None:
+                user.enabled = enabled
+        if user_id == 1:
+            first_write_complete.set()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(vulnerable_update, 1, enabled=False),
+            executor.submit(vulnerable_update, 2, role="user"),
+        ]
+        for future in futures:
+            assert future.result(timeout=15) is None
+
+    with session_factory() as session:
+        enabled_admin_ids = session.scalars(
+            select(User.id).where(User.role == "admin", User.enabled.is_(True))
+        ).all()
+        assert enabled_admin_ids == []
+
+
+def test_service_serializes_concurrent_final_administrator_updates(auth_api):
+    """Catches a second mutation entering after a stale read but before the first write."""
     api_app, _, session_factory = auth_api
     with api_client(auth_api) as client:
         establish_admin(client)
@@ -315,15 +369,56 @@ def test_concurrent_updates_preserve_one_enabled_administrator(auth_api):
         second_admin_id = created.json()["id"]
         raw_cookie = client.cookies["session"]
 
-    both_authenticated = threading.Barrier(2)
+    authentication_count = 0
+    authentication_count_lock = threading.Lock()
+    second_authenticated = threading.Event()
 
     def synchronized_admin(
         user: AuthenticatedUser = Depends(current_user),
     ) -> AuthenticatedUser:
-        both_authenticated.wait(timeout=10)
+        nonlocal authentication_count
+        with authentication_count_lock:
+            authentication_count += 1
+            if authentication_count == 2:
+                second_authenticated.set()
         return user
 
     api_app.dependency_overrides[require_admin] = synchronized_admin
+    engine = session_factory.kw["bind"]
+    invariant_read_count = 0
+    invariant_read_count_lock = threading.Lock()
+    first_invariant_read = threading.Event()
+    second_invariant_read = threading.Event()
+    release_invariant_reads = threading.Event()
+
+    def hold_invariant_read(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ) -> None:
+        nonlocal invariant_read_count
+        normalized = " ".join(statement.casefold().split())
+        if not (
+            "from user" in normalized
+            and "where user.role" in normalized
+            and "order by user.id" in normalized
+        ):
+            return
+        with invariant_read_count_lock:
+            invariant_read_count += 1
+            current_read = invariant_read_count
+        if current_read == 1:
+            first_invariant_read.set()
+        elif current_read == 2:
+            second_invariant_read.set()
+        assert release_invariant_reads.wait(timeout=10), (
+            "test did not release the controlled invariant-read boundary"
+        )
+
+    event.listen(engine, "after_cursor_execute", hold_invariant_read)
 
     def update(path: str, payload: dict[str, object]) -> int:
         async def request() -> int:
@@ -340,18 +435,34 @@ def test_concurrent_updates_preserve_one_enabled_administrator(auth_api):
 
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = [
-                executor.submit(update, "/api/users/1", {"enabled": False}),
-                executor.submit(
-                    update,
-                    f"/api/users/{second_admin_id}",
-                    {"role": "user"},
-                ),
-            ]
+            first = executor.submit(update, "/api/users/1", {"enabled": False})
+            assert first_invariant_read.wait(timeout=10), (
+                "first request never reached the invariant read"
+            )
+            second = executor.submit(
+                update,
+                f"/api/users/{second_admin_id}",
+                {"role": "user"},
+            )
+            assert second_authenticated.wait(timeout=10), (
+                "second request never completed authentication"
+            )
+            second_entered_before_release = second_invariant_read.wait(timeout=2)
+            release_invariant_reads.set()
+            futures = [first, second]
             statuses = [future.result(timeout=15) for future in futures]
     finally:
+        release_invariant_reads.set()
+        event.remove(engine, "after_cursor_execute", hold_invariant_read)
         api_app.dependency_overrides.pop(require_admin, None)
 
+    assert not second_entered_before_release, (
+        "second mutation entered the invariant read/write critical section "
+        "while the first transaction was held after its invariant read"
+    )
+    assert second_invariant_read.is_set(), (
+        "second mutation never entered after the first transaction completed"
+    )
     assert sorted(statuses) == [200, 409]
     with session_factory() as session:
         enabled_admins = session.scalars(
