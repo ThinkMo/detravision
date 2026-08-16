@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .worktrees/
 .superpowers/
+.tools/
 data/
 datasets/
 *.pt
@@ -13,3 +14,7 @@ model_repo/*.onnx
 model_repo/*.engine
 runs/
 .env
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/*.tsbuildinfo
