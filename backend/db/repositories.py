@@ -172,12 +172,15 @@ class Repository:
     def dashboard_event_counts(self, day_start: datetime) -> tuple[int, int]:
         """Return today's total and currently new events without DB date functions."""
         statement = select(
-            func.count(DetectionEvent.id),
+            func.coalesce(
+                func.sum(case((DetectionEvent.created_at >= day_start, 1), else_=0)),
+                0,
+            ),
             func.coalesce(
                 func.sum(case((DetectionEvent.status == "new", 1), else_=0)),
                 0,
             ),
-        ).where(DetectionEvent.created_at >= day_start)
+        )
         with self.session_factory() as session:
             total, new = session.execute(statement).one()
             return int(total), int(new)

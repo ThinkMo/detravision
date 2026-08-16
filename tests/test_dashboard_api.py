@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi.testclient import TestClient
 
 
@@ -58,6 +60,17 @@ def test_dashboard_summary_reports_current_counts_and_recent_events(app_factory,
                 "status": "new",
             }
         )
+        repository.create_event(
+            {
+                "camera_id": active["id"],
+                "event_type": "no_helmet",
+                "confidence": 0.88,
+                "bbox": [5, 6, 7, 8],
+                "snapshot_path": None,
+                "status": "new",
+                "created_at": datetime.now(timezone.utc) - timedelta(days=2),
+            }
+        )
 
         response = client.get("/api/dashboard/summary")
 
@@ -66,7 +79,7 @@ def test_dashboard_summary_reports_current_counts_and_recent_events(app_factory,
     assert body["camera_total"] == 2
     assert body["camera_active"] == 1
     assert body["events_today"] == 1
-    assert body["events_new"] == 1
-    assert len(body["recent_events"]) == 1
+    assert body["events_new"] == 2
+    assert len(body["recent_events"]) == 2
     assert body["recent_events"][0]["camera_id"] == active["id"]
     assert body["runtime"]["enabled"] is False
