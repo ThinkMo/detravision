@@ -32,6 +32,12 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_BATCH_BYTES = MAX_BATCH_IMAGES * MAX_IMAGE_BYTES
 MAX_IMAGE_PIXELS = 40_000_000
 ALLOWED_MEDIA_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
+EXTENSION_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
 
 logger = logging.getLogger(__name__)
 _UNSAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
@@ -101,6 +107,21 @@ class BatchService:
                         415,
                         "unsupported_media_type",
                         "images must be PNG, JPEG, or WebP",
+                    )
+                supplied_name = (upload.filename or "").replace("\\", "/")
+                extension = PurePosixPath(supplied_name).suffix.casefold()
+                extension_type = EXTENSION_MEDIA_TYPES.get(extension)
+                if extension_type is None:
+                    raise BatchServiceError(
+                        415,
+                        "unsupported_file_extension",
+                        "image filename must end with .png, .jpg, .jpeg, or .webp",
+                    )
+                if extension_type != declared_type:
+                    raise BatchServiceError(
+                        415,
+                        "media_type_mismatch",
+                        "filename extension does not match declared media type",
                     )
                 try:
                     image = validate_image(

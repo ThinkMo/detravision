@@ -8,7 +8,11 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from backend.api.audit_routes import router as audit_router
 from backend.api.auth_routes import router as auth_router
-from backend.api.batch_routes import router as batch_router
+from backend.api.batch_routes import (
+    MAX_BATCH_REQUEST_BYTES,
+    BatchUploadLimitMiddleware,
+    router as batch_router,
+)
 from backend.api.dashboard_routes import router as dashboard_router
 from backend.api.media_routes import router as media_router
 from backend.api.routes import router
@@ -141,6 +145,10 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         title=configured.app_name,
         version="0.1.0",
         lifespan=application_lifespan(configured),
+    )
+    application.add_middleware(
+        BatchUploadLimitMiddleware,
+        max_bytes=MAX_BATCH_REQUEST_BYTES,
     )
     application.include_router(router)
     application.include_router(auth_router)

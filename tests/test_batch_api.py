@@ -12,7 +12,9 @@ import httpx
 import pytest
 from PIL import Image
 from sqlalchemy import select
+from starlette.responses import Response
 
+from backend.api import batch_routes
 from backend.audit import AuditService
 from backend.auth import AuthService, hash_password
 from backend.batch import BatchRepository, CompletedImage
@@ -150,6 +152,49 @@ def stored_files(storage: LocalFileStorage) -> set[Path]:
     return {path for path in storage.root.rglob("*") if path.is_file()}
 
 
+def asgi_scope(
+    *,
+    path: str = "/api/batch-jobs",
+    method: str = "POST",
+    headers: list[tuple[bytes, bytes]] | None = None,
+) -> dict[str, object]:
+    return {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": method,
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("ascii"),
+        "query_string": b"",
+        "headers": headers or [],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+        "root_path": "",
+        "state": {},
+    }
+
+
+async def invoke_asgi(app, scope, receive):
+    messages: list[dict[str, object]] = []
+
+    async def send(message):
+        messages.append(message)
+
+    await app(scope, receive, send)
+    return messages
+
+
+def response_from_asgi(messages) -> tuple[int, dict[str, object] | None]:
+    start = next(message for message in messages if message["type"] == "http.response.start")
+    body = b"".join(
+        message.get("body", b"")
+        for message in messages
+        if message["type"] == "http.response.body"
+    )
+    return int(start["status"]), json.loads(body) if body else None
+
+
 def test_batch_routes_require_authentication(batch_app):
     """Catches batch history or uploads becoming available without a session."""
     with client_for(batch_app) as client:
@@ -194,6 +239,118 @@ def test_upload_rejected_before_validation_without_loaded_model(batch_app):
     assert stored_files(storage) == set()
 
 
+def test_declared_oversized_batch_is_rejected_before_receive_parse_or_service(
+    batch_app,
+    monkeypatch,
+):
+    """Catches known oversized multipart bodies reaching temp spooling or the service."""
+    api_app, *_ = batch_app
+    max_bytes = getattr(batch_routes, "MAX_BATCH_REQUEST_BYTES", None)
+    middleware_type = getattr(batch_routes, "BatchUploadLimitMiddleware", None)
+    assert isinstance(max_bytes, int), "batch request byte limit is missing"
+    assert middleware_type is not None, "batch upload limit middleware is missing"
+
+    async def receive():
+        raise AssertionError("oversized Content-Length must be rejected before receive")
+
+    def service_must_not_run(*_args, **_kwargs):
+        raise AssertionError("batch service must not run for an oversized body")
+
+    def spool_must_not_run(*_args, **_kwargs):
+        raise AssertionError("multipart temp spooling must not start")
+
+    monkeypatch.setattr(batch_routes.BatchService, "create_job", service_must_not_run)
+    monkeypatch.setattr(
+        "starlette.formparsers.SpooledTemporaryFile",
+        spool_must_not_run,
+    )
+    messages = asyncio.run(
+        invoke_asgi(
+            api_app,
+            asgi_scope(
+                headers=[
+                    (b"content-type", b"multipart/form-data; boundary=limit-test"),
+                    (b"content-length", str(max_bytes + 1).encode("ascii")),
+                ]
+            ),
+            receive,
+        )
+    )
+    status_code, payload = response_from_asgi(messages)
+    assert status_code == 413
+    assert payload == {
+        "code": "batch_request_too_large",
+        "message": "batch upload request exceeds the byte limit",
+    }
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [],
+        [(b"content-length", b"1")],
+        [(b"transfer-encoding", b"chunked")],
+    ],
+    ids=["missing-content-length", "forged-content-length", "chunked"],
+)
+def test_streamed_batch_limit_counts_receive_bytes_and_stops_early(headers):
+    """Catches missing or untrusted length headers bypassing the receive-layer cap."""
+    middleware_type = getattr(batch_routes, "BatchUploadLimitMiddleware", None)
+    assert middleware_type is not None, "batch upload limit middleware is missing"
+    receive_calls = 0
+    chunks = [b"a" * 40, b"b" * 30, b"must-not-be-read"]
+
+    async def receive():
+        nonlocal receive_calls
+        body = chunks[receive_calls]
+        receive_calls += 1
+        return {
+            "type": "http.request",
+            "body": body,
+            "more_body": receive_calls < len(chunks),
+        }
+
+    async def consume_body(scope, downstream_receive, send):
+        while True:
+            message = await downstream_receive()
+            if not message.get("more_body", False):
+                break
+        await Response(status_code=204)(scope, downstream_receive, send)
+
+    middleware = middleware_type(consume_body, max_bytes=64)
+    messages = asyncio.run(invoke_asgi(middleware, asgi_scope(headers=headers), receive))
+    status_code, payload = response_from_asgi(messages)
+    assert status_code == 413
+    assert payload["code"] == "batch_request_too_large"
+    assert receive_calls == 2
+
+
+def test_batch_limit_allows_exact_boundary_and_does_not_limit_other_routes():
+    """Catches an off-by-one cap or accidental application-wide request limit."""
+    middleware_type = getattr(batch_routes, "BatchUploadLimitMiddleware", None)
+    assert middleware_type is not None, "batch upload limit middleware is missing"
+
+    async def consume_body(scope, receive, send):
+        message = await receive()
+        assert len(message["body"]) == 64
+        await Response(status_code=204)(scope, receive, send)
+
+    async def receive():
+        return {"type": "http.request", "body": b"x" * 64, "more_body": False}
+
+    middleware = middleware_type(consume_body, max_bytes=64)
+    exact = asyncio.run(invoke_asgi(middleware, asgi_scope(), receive))
+    unrelated = asyncio.run(
+        invoke_asgi(
+            middleware,
+            asgi_scope(path="/api/auth/login"),
+            receive,
+        )
+    )
+    assert response_from_asgi(exact)[0] == 204
+    assert response_from_asgi(unrelated)[0] == 204
+
+
 def test_upload_accepts_exactly_ten_mib_and_rejects_one_byte_more(batch_app):
     """Catches an off-by-one error in the per-image encoded byte cap."""
     png = image_bytes()
@@ -233,6 +390,56 @@ def test_upload_rejects_fake_mime_corrupt_and_unsupported_files(
             files=upload_files((filename, content, media_type)),
         )
     assert response.status_code == status_code
+    assert response.json()["code"] == code
+    assert repository.list_jobs(user_id=user_ids["operator"]).total == 0
+    assert stored_files(storage) == set()
+
+
+@pytest.mark.parametrize(
+    ("filename", "image_format", "media_type"),
+    [
+        ("PHOTO.PNG", "PNG", "image/png"),
+        ("photo.JpG", "JPEG", "image/jpeg"),
+        ("photo.JpEg", "JPEG", "image/jpeg"),
+        ("photo.WeBp", "WEBP", "image/webp"),
+    ],
+)
+def test_upload_accepts_case_insensitive_matching_image_extensions(
+    batch_app,
+    filename,
+    image_format,
+    media_type,
+):
+    """Catches valid mixed-case allowed extensions being rejected."""
+    with client_for(batch_app, "user") as client:
+        response = client.post(
+            "/api/batch-jobs",
+            files=upload_files((filename, image_bytes(image_format), media_type)),
+        )
+    assert response.status_code == 201
+
+
+@pytest.mark.parametrize(
+    ("filename", "code"),
+    [
+        ("photo", "unsupported_file_extension"),
+        ("photo.txt", "unsupported_file_extension"),
+        ("photo.jpg", "media_type_mismatch"),
+    ],
+)
+def test_upload_rejects_missing_unsupported_or_content_mismatched_extensions(
+    batch_app,
+    filename,
+    code,
+):
+    """Catches absent or forged filename extensions bypassing format validation."""
+    _, _, repository, storage, _, user_ids = batch_app
+    with client_for(batch_app, "user") as client:
+        response = client.post(
+            "/api/batch-jobs",
+            files=upload_files((filename, image_bytes("PNG"), "image/png")),
+        )
+    assert response.status_code == 415
     assert response.json()["code"] == code
     assert repository.list_jobs(user_id=user_ids["operator"]).total == 0
     assert stored_files(storage) == set()

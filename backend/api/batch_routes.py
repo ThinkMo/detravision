@@ -7,11 +7,18 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from backend.audit import audit_service, request_ip
 from backend.auth import AuthenticatedUser
 from backend.auth.dependencies import current_user, require_same_origin
-from backend.batch.service import BatchService, BatchServiceError
+from backend.batch.service import (
+    MAX_BATCH_IMAGES,
+    MAX_IMAGE_BYTES,
+    BatchService,
+    BatchServiceError,
+)
 from backend.schemas import (
     BatchImageResponse,
     BatchJobDetailResponse,
@@ -25,6 +32,98 @@ router = APIRouter(
     tags=["batch inference"],
     dependencies=[Depends(require_same_origin)],
 )
+
+MAX_BATCH_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+MAX_BATCH_REQUEST_BYTES = (
+    MAX_BATCH_IMAGES * MAX_IMAGE_BYTES + MAX_BATCH_MULTIPART_OVERHEAD_BYTES
+)
+
+
+class _BatchRequestTooLarge(Exception):
+    pass
+
+
+class BatchUploadLimitMiddleware:
+    """Bound the batch-upload ASGI receive stream before multipart parsing."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        max_bytes: int = MAX_BATCH_REQUEST_BYTES,
+    ) -> None:
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be positive")
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        if not self._is_batch_upload(scope):
+            await self.app(scope, receive, send)
+            return
+
+        content_length = self._content_length(scope)
+        if content_length is not None and content_length > self.max_bytes:
+            await self._reject(scope, receive, send)
+            return
+
+        received = 0
+        response_started = False
+
+        async def limited_receive() -> Message:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_bytes:
+                    raise _BatchRequestTooLarge
+            return message
+
+        async def tracked_send(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, tracked_send)
+        except _BatchRequestTooLarge:
+            if response_started:
+                raise
+            await self._reject(scope, receive, send)
+
+    @staticmethod
+    def _is_batch_upload(scope: Scope) -> bool:
+        return (
+            scope["type"] == "http"
+            and scope.get("method") == "POST"
+            and scope.get("path") == "/api/batch-jobs"
+        )
+
+    @staticmethod
+    def _content_length(scope: Scope) -> int | None:
+        supplied = Headers(scope=scope).get("content-length")
+        if supplied is None:
+            return None
+        try:
+            return int(supplied)
+        except ValueError:
+            return None
+
+    @staticmethod
+    async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
+        response = JSONResponse(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            content={
+                "code": "batch_request_too_large",
+                "message": "batch upload request exceeds the byte limit",
+            },
+        )
+        await response(scope, receive, send)
 
 
 def batch_service(request: Request) -> BatchService:
