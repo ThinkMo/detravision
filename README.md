@@ -24,7 +24,7 @@
 ## 架构
 
 ```text
-REST 配置 ──> SQLite ──> reconciler ──> 每路 RTSP Capture
+REST 配置 ──> SQLAlchemy 数据库 ──> reconciler ──> 每路 RTSP Capture
                                             │
                                             v
                                   DropOldestQueue（有界）
@@ -141,6 +141,8 @@ cd ..
 .\.venv\Scripts\python.exe -m uvicorn backend.main:app
 ```
 
+SQLite 仅用于本地开发和验收，运行边界是单应用实例、`BATCH_WORKER_COUNT=1`。在后台批量工作线程、保留期清理器与 API 极端同时写入时，SQLite 仍可能报告 `database is locked`；这是本地模式可接受的限制，不应通过增加工作线程规避。先停止服务并等待占用锁的进程退出，确认没有重复实例后再重启：批量工作线程会把中断在 `processing` 的图片恢复为队列任务，清理器也会在启动时重新扫描到期任务。若文件或数据库清理仍失败，记录会保留并在后续清理周期继续重试。
+
 访问 <http://127.0.0.1:8000/> 即可打开控制台；`/dashboard` 等前端路由由 SPA fallback 处理，`/api/*`、`/ws/*`、`/docs` 和 `/openapi.json` 保持后端路由优先。更新前端代码后需重新执行 `npm run build`。
 
 访问：
@@ -229,14 +231,14 @@ $env:REAL_MODEL_TEST_IMAGE_DIR = (Resolve-Path "datasets/construction-ppe/images
 
 ## 数据库迁移与生产配置
 
-开发环境会在应用启动时自动升级数据库。生产环境必须先显式执行迁移，再启动服务。数据库 URL、初始管理员密码和 Cookie 安全参数应由进程管理器或密钥管理服务注入；以下命令假定这些变量已经安全配置，不在命令示例中出现任何凭据：
+开发环境会在应用启动时自动升级数据库。生产环境必须使用 MySQL 8.0.13 或更高版本，并由进程管理器或密钥管理服务注入 MySQL `DATABASE_URL`、初始管理员密码和 Cookie 安全参数。生产启动前必须使用同一个 `DATABASE_URL` 显式执行现有 Alembic 迁移，再启动服务；以下命令假定这些变量已经安全配置，不在命令示例中出现任何凭据：
 
 ```powershell
 .\.venv\Scripts\python.exe -c "from backend.core.config import settings; from backend.db.migrate import run_migrations; run_migrations(settings.database_url)"
 .\.venv\Scripts\python.exe -m uvicorn backend.main:app
 ```
 
-MySQL 连接代码和受 `TEST_MYSQL_URL` 控制的迁移/仓储测试已保留，要求 MySQL 8.0.13 或更高版本。本轮只验收本地 SQLite；MySQL 实机验收与部署明确延后，当前无需安装或启动 MySQL、Docker。
+仓库已保留 MySQL 连接代码，以及受 `TEST_MYSQL_URL` 控制的迁移/仓储测试，但这不等于 MySQL 已经通过实机验收。本次执行只跑通了本地 SQLite；live MySQL、备份恢复和部署验收均明确延后。上线前必须在目标 MySQL 8.0.13+ 环境执行迁移、仓储、批量任务与恢复测试，不能把本地 SQLite 结果当作生产数据库验收结果。
 
 ## 数据与训练
 
@@ -349,7 +351,7 @@ Substitute your actual training run directory when it differs from
 
 ## 当前限制
 
-- SQLite 适合单实例 MVP，不支持多实例并发部署。
+- SQLite 只支持本地单实例、单批量工作线程；极端并发写入可能出现 `database is locked`，生产必须切换到完成实机验收的 MySQL 8.0.13+。
 - WebSocket 实时画面为 JPEG 帧，不适合高帧率或大规模观看端；规模化时应换 WebRTC/HLS。
 - 当前去重以摄像头和事件类型为粒度，尚未接入目标追踪器。
 - 模型兼容性由 Ultralytics 运行时校验；生产部署应在激活前增加独立的模型预热和验收流程。
