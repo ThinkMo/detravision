@@ -102,3 +102,39 @@ class UserResponse(CurrentUserResponse):
 
 class TemporaryPasswordResponse(BaseModel):
     temporary_password: str
+
+
+class BatchJobResponse(BaseModel):
+    id: int
+    user_id: int
+    status: str
+    image_total: int
+    success_count: int
+    failure_count: int
+    expires_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+class BatchImageResponse(BaseModel):
+    id: int
+    display_name: str
+    status: str
+    error_code: str | None
+    error_message: str | None
+    model_version_id: int | None
+    detections: list[dict[str, object]]
+    result_url: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class BatchJobDetailResponse(BatchJobResponse):
+    images: list[BatchImageResponse]
+
+
+class BatchJobPageResponse(BaseModel):
+    items: list[BatchJobResponse]
+    total: int
+    page: int
+    page_size: int

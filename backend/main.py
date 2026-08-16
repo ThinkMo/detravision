@@ -8,6 +8,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from backend.api.audit_routes import router as audit_router
 from backend.api.auth_routes import router as auth_router
+from backend.api.batch_routes import router as batch_router
 from backend.api.dashboard_routes import router as dashboard_router
 from backend.api.media_routes import router as media_router
 from backend.api.routes import router
@@ -143,6 +144,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     )
     application.include_router(router)
     application.include_router(auth_router)
+    application.include_router(batch_router)
     application.include_router(user_router)
     application.include_router(audit_router)
     application.include_router(site_router)
