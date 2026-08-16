@@ -76,10 +76,10 @@ export function EventsPage() {
       {message ? <div className="event-message" role="status" aria-live="polite">{message}</div> : null}
       {events.data.length === 0 ? <EmptyState message="当前筛选条件下没有事件" /> : (
         <div className="events-layout">
-          <div className="events-table-wrap">
+          <div className="events-table-wrap" role="region" aria-label="事件列表" tabIndex={0}>
             <table className="events-table"><thead><tr><th>事件</th><th>摄像头</th><th>置信度</th><th>时间</th><th>状态</th><th><span className="sr-only">操作</span></th></tr></thead><tbody>
               {events.data.map((event) => { const status = eventStatus(event.status); return <tr key={event.id} className={event.id === selectedId ? "events-table__selected" : ""}>
-                <td><strong>{event.event_type}</strong><small>#{event.id}</small></td><td>{cameraById.get(event.camera_id)?.name ?? `#${event.camera_id}`}</td><td>{Math.round(event.confidence * 100)}%</td><td><time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString("zh-CN", { hour12: false })}</time></td><td><span className={`event-status event-status--${status.tone}`}>{status.label}</span></td><td><button type="button" className="table-action" aria-label={`查看事件 #${event.id}`} onClick={() => setSelectedId(event.id)}>查看</button></td>
+                <td data-label="事件"><strong>{event.event_type}</strong><small>#{event.id}</small></td><td data-label="摄像头">{cameraById.get(event.camera_id)?.name ?? `#${event.camera_id}`}</td><td data-label="置信度">{Math.round(event.confidence * 100)}%</td><td data-label="时间"><time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString("zh-CN", { hour12: false })}</time></td><td data-label="状态"><span className={`event-status event-status--${status.tone}`}>{status.label}</span></td><td data-label="操作"><button type="button" className="table-action" aria-label={`查看事件 #${event.id}`} onClick={() => setSelectedId(event.id)}>查看</button></td>
               </tr>; })}
             </tbody></table>
           </div>

@@ -19,6 +19,7 @@ export function AppShell() {
   const location = useLocation();
   const [navigationOpen, setNavigationOpen] = useState(false);
   const menuTrigger = useRef<HTMLButtonElement | null>(null);
+  const mobileNavigation = useRef<HTMLDivElement | null>(null);
   const summary = useDashboardSummary();
 
   const closeNavigation = () => {
@@ -28,8 +29,30 @@ export function AppShell() {
 
   useEffect(() => {
     if (!navigationOpen) return;
+    const focusable = () => Array.from(
+      mobileNavigation.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) ?? [],
+    );
+    const firstNavigationLink = mobileNavigation.current?.querySelector<HTMLElement>(".sidebar__link");
+    firstNavigationLink?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeNavigation();
+      if (event.key === "Escape") {
+        closeNavigation();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const elements = focusable();
+      const first = elements[0];
+      const last = elements.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -41,8 +64,8 @@ export function AppShell() {
         <Sidebar />
       </aside>
       {navigationOpen ? (
-        <div className="mobile-navigation" role="dialog" aria-modal="true" aria-label="移动导航">
-          <button type="button" className="mobile-navigation__backdrop" aria-label="关闭导航" onClick={closeNavigation} />
+        <div ref={mobileNavigation} className="mobile-navigation" role="dialog" aria-modal="true" aria-label="移动导航">
+          <button type="button" tabIndex={-1} className="mobile-navigation__backdrop" aria-label="关闭导航" onClick={closeNavigation} />
           <aside className="mobile-navigation__panel">
             <Sidebar onNavigate={closeNavigation} />
           </aside>
