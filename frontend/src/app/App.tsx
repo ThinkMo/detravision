@@ -6,7 +6,9 @@ import { LoginPage } from "../auth/LoginPage";
 import { AdminRoute, ProtectedRoute } from "../auth/ProtectedRoute";
 import { BrandProvider } from "../brand/BrandProvider";
 import { DashboardPage } from "../dashboard/DashboardPage";
+import { EventsPage } from "../events/EventsPage";
 import { AppShell } from "../layout/AppShell";
+import { LivePage } from "../live/LivePage";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false } },
@@ -32,6 +34,8 @@ export function App() {
                 <Route path="/change-password" element={<ChangePasswordPage />} />
                 <Route element={<AppShell />}>
                   <Route path="/dashboard" element={<DashboardPage />} />
+                  <Route path="/live" element={<LivePage />} />
+                  <Route path="/events" element={<EventsPage />} />
                   <Route element={<AdminRoute />}>
                     <Route path="/admin" element={<AdminPage />} />
                   </Route>

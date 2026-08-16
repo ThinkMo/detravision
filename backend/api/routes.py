@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -224,9 +225,20 @@ def events(
     camera_id: int | None = None,
     event_type: str | None = None,
     event_status: str | None = Query(default=None, alias="status"),
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
     db: Repository = Depends(repository),
 ) -> list[dict[str, Any]]:
-    return db.list_events(camera_id=camera_id, event_type=event_type, status=event_status)
+    for value in (created_from, created_to):
+        if value is not None and value.tzinfo is None:
+            raise HTTPException(status_code=422, detail="event time filters must include a UTC offset")
+    return db.list_events(
+        camera_id=camera_id,
+        event_type=event_type,
+        status=event_status,
+        created_from=created_from.astimezone(timezone.utc) if created_from else None,
+        created_to=created_to.astimezone(timezone.utc) if created_to else None,
+    )
 
 
 @protected_router.patch("/events/{event_id}")

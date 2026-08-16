@@ -158,7 +158,13 @@ class Repository:
         return self._list(statement, person_dict)
 
     def list_events(
-        self, *, camera_id: int | None = None, event_type: str | None = None, status: str | None = None
+        self,
+        *,
+        camera_id: int | None = None,
+        event_type: str | None = None,
+        status: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
     ) -> list[dict[str, Any]]:
         statement = select(DetectionEvent).order_by(DetectionEvent.id.desc())
         if camera_id is not None:
@@ -167,7 +173,16 @@ class Repository:
             statement = statement.where(DetectionEvent.event_type == event_type)
         if status is not None:
             statement = statement.where(DetectionEvent.status == status)
+        if created_from is not None:
+            statement = statement.where(DetectionEvent.created_at >= created_from)
+        if created_to is not None:
+            statement = statement.where(DetectionEvent.created_at <= created_to)
         return self._list(statement, event_dict)
+
+    def get_event(self, event_id: int) -> dict[str, Any] | None:
+        with self.session_factory() as session:
+            row = session.get(DetectionEvent, event_id)
+            return event_dict(row) if row else None
 
     def dashboard_event_counts(self, day_start: datetime) -> tuple[int, int]:
         """Return today's total and currently new events without DB date functions."""
