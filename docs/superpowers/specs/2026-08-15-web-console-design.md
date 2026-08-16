@@ -73,9 +73,9 @@ Browser
 引入 SQLAlchemy 2 ORM 和 Alembic。环境变量 `DATABASE_URL` 决定数据库：
 
 - 默认：`sqlite:///data/safety_detect.db`；
-- MySQL 示例：`mysql+pymysql://user:password@host:3306/safety_detect?charset=utf8mb4`。
+- MySQL 最低支持 8.0.13，示例：`mysql+pymysql://user:password@host:3306/safety_detect?charset=utf8mb4`。
 
-模型只使用 SQLite 和 MySQL 都支持的字段、索引和外键。ROI、检测类别、边界框和识别结果以 JSON 文本存储，并在仓储边界序列化，避免依赖数据库特有 JSON 查询语法。时间统一按 UTC 写入，API 输出 ISO 8601 时间。
+模型只使用 SQLite 和 MySQL 都支持的字段、索引和外键。ROI、检测类别、状态、运行时、边界框和识别结果统一以 `TEXT` 存储；需要默认值的 `TEXT` 使用 MySQL 8.0.13 起支持的括号表达式写法。JSON 数据在仓储边界序列化，避免依赖数据库特有 JSON 查询语法。时间统一按 UTC 写入，API 输出 ISO 8601 时间。
 
 ### 4.2 兼容现有数据库
 

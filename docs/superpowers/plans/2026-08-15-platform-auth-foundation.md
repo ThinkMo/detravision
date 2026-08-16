@@ -12,7 +12,8 @@
 
 - Preserve existing REST paths and response field names for cameras, persons, alarm groups, events, and model versions.
 - Default DATABASE_URL is sqlite:///data/safety_detect.db.
-- MySQL uses mysql+pymysql and utf8mb4 without database-specific JSON queries.
+- MySQL uses mysql+pymysql and utf8mb4, requires MySQL 8.0.13 or newer, and does not use database-specific JSON queries.
+- camera.roi, camera.detect_classes, detection_event.status, and model_version.runtime remain Text on both SQLite and MySQL; Text defaults use parenthesized default expressions accepted by MySQL 8.0.13 or newer.
 - Store all timestamps in UTC and expose ISO 8601 values.
 - No public registration endpoint.
 - Bootstrap username is admin; production requires ADMIN_INITIAL_PASSWORD, while development may use admin123456.
@@ -112,7 +113,7 @@ class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 ~~~
 
-Map legacy table and column names exactly. Store JSON-shaped values in Text columns and expose repository serialization rather than dialect-specific JSON operations. Define user roles as string values admin and user.
+Map legacy table and column names exactly. Keep roi, detect_classes, status, and runtime as Text columns on every database. Use parenthesized server-default expressions for their defaults so MySQL 8.0.13 or newer accepts the DDL. Expose JSON serialization through repositories rather than dialect-specific JSON operations. Define user roles as string values admin and user.
 
 - [ ] **Step 5: Implement legacy-aware Alembic migration**
 
@@ -130,7 +131,7 @@ def run_migrations(database_url: str) -> None:
     command.upgrade(alembic_config(database_url), "head")
 ~~~
 
-validate_legacy_columns compares the required legacy column sets and raises RuntimeError with the table and missing columns when the structure is incompatible. Revision 0001 creates the six legacy tables for a fresh database; revision 0002 creates user, user_session, site_settings, and audit_log, then adds nullable detection_event.ack_user_id with a foreign key to user.id and an index. Use Alembic batch table alteration for SQLite compatibility.
+validate_legacy_columns compares the required legacy column sets and raises RuntimeError with the table and missing columns when the structure is incompatible. For MySQL, run_migrations rejects server versions older than 8.0.13 before applying DDL. Revision 0001 creates the six legacy tables for a fresh database with Text defaults expressed in parentheses; revision 0002 creates user, user_session, site_settings, and audit_log, then adds nullable detection_event.ack_user_id with a foreign key to user.id and an index. Use Alembic batch table alteration for SQLite compatibility.
 
 - [ ] **Step 6: Install dependencies and run migration tests**
 
