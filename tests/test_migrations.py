@@ -4,15 +4,17 @@ import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from io import StringIO
+from types import SimpleNamespace
 
 import pytest
 from alembic import command
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import Text, create_engine, inspect, select, text
 from sqlalchemy.dialects import mysql, sqlite
 from sqlalchemy.engine import make_url
 
+from backend.db import migrate
 from backend.db.migrate import alembic_config, run_migrations
-from backend.db.models import Camera, DetectionEvent, UserSession
+from backend.db.models import Camera, DetectionEvent, ModelVersion, UserSession
 from backend.db.session import create_engine_from_url, create_session_factory
 
 
@@ -118,8 +120,8 @@ def test_incompatible_legacy_schema_is_rejected_before_stamping(tmp_path):
         run_migrations("sqlite:///" + path.as_posix())
 
 
-def test_mysql_baseline_sql_uses_defaultable_column_types():
-    """Catches baseline defaults on MySQL TEXT columns, which prevent fresh upgrades."""
+def test_mysql_baseline_sql_uses_parenthesized_text_defaults():
+    """Catches MySQL baseline DDL that loses legacy Text types or expression defaults."""
     output = StringIO()
     config = alembic_config("mysql+pymysql://safety:safety@127.0.0.1/safety_test?charset=utf8mb4")
     config.output_buffer = output
@@ -127,9 +129,37 @@ def test_mysql_baseline_sql_uses_defaultable_column_types():
     command.upgrade(config, "0001", sql=True)
 
     sql = output.getvalue()
-    assert "VARCHAR(8192) NOT NULL DEFAULT '[]'" in sql
-    assert "VARCHAR(4096) NOT NULL DEFAULT '[\"no_helmet\",\"fire\",\"smoke\"]'" in sql
-    assert "TEXT NOT NULL DEFAULT" not in sql
+    assert "roi TEXT NOT NULL DEFAULT ('[]')" in sql
+    assert "detect_classes TEXT NOT NULL DEFAULT ('[\"no_helmet\",\"fire\",\"smoke\"]')" in sql
+    assert "status TEXT NOT NULL DEFAULT ('new')" in sql
+    assert "runtime TEXT NOT NULL DEFAULT ('onnx-fp32')" in sql
+
+
+def test_json_and_legacy_default_fields_remain_text_in_metadata():
+    """Catches type drift from the existing legacy SQLite schema."""
+    columns = (
+        Camera.__table__.c.roi,
+        Camera.__table__.c.detect_classes,
+        DetectionEvent.__table__.c.status,
+        ModelVersion.__table__.c.runtime,
+    )
+
+    assert all(isinstance(column.type, Text) for column in columns)
+
+
+def test_mysql_version_older_than_expression_defaults_is_rejected():
+    """Catches applying parenthesized Text defaults to unsupported MySQL releases."""
+    engine = SimpleNamespace(dialect=SimpleNamespace(name="mysql", server_version_info=(8, 0, 12)))
+
+    with pytest.raises(RuntimeError, match=r"MySQL 8\.0\.13 or newer"):
+        migrate.validate_mysql_version(engine)
+
+
+def test_mysql_version_supporting_expression_defaults_is_accepted():
+    """Catches rejecting the minimum MySQL version that supports expression defaults."""
+    engine = SimpleNamespace(dialect=SimpleNamespace(name="mysql", server_version_info=(8, 0, 13)))
+
+    migrate.validate_mysql_version(engine)
 
 
 def test_timestamp_columns_normalize_aware_values_and_reject_naive_values():

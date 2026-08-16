@@ -31,6 +31,14 @@ def validate_legacy_columns(engine: Engine) -> None:
             raise RuntimeError(f"Legacy table {table} is missing columns: {', '.join(missing)}")
 
 
+def validate_mysql_version(engine: Engine) -> None:
+    if engine.dialect.name != "mysql":
+        return
+    version = engine.dialect.server_version_info
+    if version is None or version < (8, 0, 13):
+        raise RuntimeError("MySQL 8.0.13 or newer is required for Text default expressions")
+
+
 def alembic_config(database_url: str) -> Config:
     root = Path(__file__).resolve().parents[2]
     config = Config(str(root / "alembic.ini"))
@@ -54,6 +62,7 @@ def run_migrations(database_url: str) -> None:
     engine = create_engine_from_url(database_url)
     try:
         tables = set(inspect(engine).get_table_names())
+        validate_mysql_version(engine)
         config = alembic_config(database_url)
         if "alembic_version" not in tables and LEGACY_TABLES <= tables:
             validate_legacy_columns(engine)
