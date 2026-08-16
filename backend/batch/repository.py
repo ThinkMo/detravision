@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.db.models import BatchImage, BatchJob
@@ -275,6 +275,18 @@ class BatchRepository:
                     )
                 )
             return expired
+
+    def delete_expired_job(self, job_id: int, *, now: datetime) -> bool:
+        """Delete one still-expired job after its opaque storage keys are removed."""
+        self._require_aware(now)
+        with self._session_factory.begin() as session:
+            deleted = session.execute(
+                delete(BatchJob).where(
+                    BatchJob.id == job_id,
+                    BatchJob.expires_at <= now,
+                )
+            )
+            return deleted.rowcount == 1
 
     @staticmethod
     def _recompute_job(session: Session, job_id: int, now: datetime) -> None:

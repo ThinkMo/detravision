@@ -16,6 +16,7 @@ from backend.api.user_routes import router as user_router
 from backend.audit import AuditService
 from backend.auth import AuthenticatedUser, AuthService
 from backend.auth.dependencies import SESSION_COOKIE_NAME
+from backend.batch import BatchRepository, BatchWorker, RetentionCleaner
 from backend.brand import BrandService
 from backend.core.config import Settings, settings
 from backend.db import Repository
@@ -51,6 +52,9 @@ def application_lifespan(app_settings: Settings):
             build_detector(app_settings.model_path),
             model_version_id=None,
         )
+        batch_repository = BatchRepository(session_factory)
+        batch_worker = BatchWorker(batch_repository, detector_provider, file_storage)
+        retention_cleaner = RetentionCleaner(batch_repository, file_storage)
         runtime = RuntimeManager(
             app_settings,
             repository,
@@ -67,12 +71,22 @@ def application_lifespan(app_settings: Settings):
         app.state.cookie_secure = app_settings.cookie_secure
         app.state.hub = hub
         app.state.detector_provider = detector_provider
+        app.state.batch_repository = batch_repository
+        app.state.batch_worker = batch_worker
+        app.state.retention_cleaner = retention_cleaner
         app.state.runtime = runtime
-        await runtime.start()
+        runtime_started = False
         try:
+            await runtime.start()
+            runtime_started = True
+            batch_worker.start()
+            retention_cleaner.start()
             yield
         finally:
-            await runtime.stop()
+            batch_worker.stop()
+            retention_cleaner.stop()
+            if runtime_started:
+                await runtime.stop()
             engine.dispose()
 
     return lifespan
