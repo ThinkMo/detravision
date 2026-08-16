@@ -8,6 +8,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from backend.api.audit_routes import router as audit_router
 from backend.api.auth_routes import router as auth_router
+from backend.api.dashboard_routes import router as dashboard_router
 from backend.api.routes import router
 from backend.api.site_routes import router as site_router
 from backend.api.user_routes import router as user_router
@@ -125,6 +126,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     application.include_router(user_router)
     application.include_router(audit_router)
     application.include_router(site_router)
+    application.include_router(dashboard_router)
     application.add_api_websocket_route("/ws/events", event_stream)
     application.add_api_websocket_route("/ws/live/{camera_id}", live_stream)
     mount_frontend(application, FRONTEND_DIST_DIR)

@@ -5,7 +5,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import AlarmGroup, Camera, DetectionEvent, ModelVersion, Person, alarm_group_member
@@ -88,6 +88,16 @@ class Repository:
     def list_enabled_cameras(self) -> list[dict[str, Any]]:
         return self._list(select(Camera).where(Camera.enabled.is_(True)).order_by(Camera.id.desc()), camera_dict)
 
+    def dashboard_camera_counts(self) -> tuple[int, int]:
+        """Return total and enabled camera counts in one portable aggregate."""
+        statement = select(
+            func.count(Camera.id),
+            func.coalesce(func.sum(case((Camera.enabled.is_(True), 1), else_=0)), 0),
+        )
+        with self.session_factory() as session:
+            total, active = session.execute(statement).one()
+            return int(total), int(active)
+
     def get_camera(self, camera_id: int) -> dict[str, Any] | None:
         with self.session_factory() as session:
             row = session.get(Camera, camera_id)
@@ -157,6 +167,27 @@ class Repository:
             statement = statement.where(DetectionEvent.event_type == event_type)
         if status is not None:
             statement = statement.where(DetectionEvent.status == status)
+        return self._list(statement, event_dict)
+
+    def dashboard_event_counts(self, day_start: datetime) -> tuple[int, int]:
+        """Return today's total and currently new events without DB date functions."""
+        statement = select(
+            func.count(DetectionEvent.id),
+            func.coalesce(
+                func.sum(case((DetectionEvent.status == "new", 1), else_=0)),
+                0,
+            ),
+        ).where(DetectionEvent.created_at >= day_start)
+        with self.session_factory() as session:
+            total, new = session.execute(statement).one()
+            return int(total), int(new)
+
+    def list_recent_events(self, limit: int = 8) -> list[dict[str, Any]]:
+        statement = (
+            select(DetectionEvent)
+            .order_by(DetectionEvent.created_at.desc(), DetectionEvent.id.desc())
+            .limit(limit)
+        )
         return self._list(statement, event_dict)
 
     def create_event(self, data: dict[str, Any]) -> dict[str, Any]:

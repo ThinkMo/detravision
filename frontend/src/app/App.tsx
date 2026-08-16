@@ -5,14 +5,12 @@ import { ChangePasswordPage } from "../auth/ChangePasswordPage";
 import { LoginPage } from "../auth/LoginPage";
 import { AdminRoute, ProtectedRoute } from "../auth/ProtectedRoute";
 import { BrandProvider } from "../brand/BrandProvider";
+import { DashboardPage } from "../dashboard/DashboardPage";
+import { AppShell } from "../layout/AppShell";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false } },
 });
-
-function DashboardPage() {
-  return <main><h1>工作台</h1></main>;
-}
 
 function AdminPage() {
   return <main><h1>系统管理</h1></main>;
@@ -32,10 +30,12 @@ export function App() {
               <Route path="/login" element={<LoginPage />} />
               <Route element={<ProtectedRoute />}>
                 <Route path="/change-password" element={<ChangePasswordPage />} />
-                <Route path="/dashboard" element={<DashboardPage />} />
-              </Route>
-              <Route element={<AdminRoute />}>
-                <Route path="/admin" element={<AdminPage />} />
+                <Route element={<AppShell />}>
+                  <Route path="/dashboard" element={<DashboardPage />} />
+                  <Route element={<AdminRoute />}>
+                    <Route path="/admin" element={<AdminPage />} />
+                  </Route>
+                </Route>
               </Route>
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
               <Route path="*" element={<NotFoundPage />} />

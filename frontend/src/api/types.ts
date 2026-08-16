@@ -35,6 +35,25 @@ export interface Event {
   created_at: string;
 }
 
+export interface RuntimeStatus {
+  enabled: boolean;
+  active_cameras: number[];
+  queued_frames: number;
+  dropped_frames: number;
+  processed_frames: number;
+  created_events: number;
+  capture_errors: Record<string, string>;
+}
+
+export interface DashboardSummary {
+  camera_total: number;
+  camera_active: number;
+  events_today: number;
+  events_new: number;
+  recent_events: Event[];
+  runtime: RuntimeStatus;
+}
+
 export interface Person {
   id: number;
   name: string;

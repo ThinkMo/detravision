@@ -32,6 +32,24 @@ function installApi(initialUser: User | null, loginUser?: User) {
       if (path === "/api/auth/login" && init?.method === "POST" && loginUser) {
         return response(loginUser);
       }
+      if (path === "/api/dashboard/summary") {
+        return response({
+          camera_total: 0,
+          camera_active: 0,
+          events_today: 0,
+          events_new: 0,
+          recent_events: [],
+          runtime: {
+            enabled: false,
+            active_cameras: [],
+            queued_frames: 0,
+            dropped_frames: 0,
+            processed_frames: 0,
+            created_events: 0,
+            capture_errors: {},
+          },
+        });
+      }
       throw new Error(`Unexpected request: ${init?.method ?? "GET"} ${path}`);
     }),
   );
@@ -74,7 +92,7 @@ it("returns a signed-in user to the protected destination", async () => {
   await userEvent.type(screen.getByLabelText("密码"), "correct-password");
   await userEvent.click(screen.getByRole("button", { name: "登录" }));
   expect(
-    await screen.findByRole("heading", { name: "工作台" }),
+    await screen.findByRole("heading", { name: "安全态势" }),
   ).toBeInTheDocument();
 });
 
