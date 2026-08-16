@@ -1,11 +1,24 @@
-from backend.db import Database
+import pytest
+
+from backend.db import Repository
+from backend.db.migrate import run_migrations
+from backend.db.session import create_engine_from_url, create_session_factory
 
 
-def test_camera_crud_and_json_round_trip(tmp_path):
-    db = Database(tmp_path / "test.db")
-    db.initialize()
-    camera = db.create(
-        "camera",
+@pytest.fixture
+def repository(tmp_path):
+    database_url = "sqlite:///" + (tmp_path / "test.db").as_posix()
+    run_migrations(database_url)
+    engine = create_engine_from_url(database_url)
+    try:
+        yield Repository(create_session_factory(engine))
+    finally:
+        engine.dispose()
+
+
+def test_camera_crud_and_json_round_trip(repository):
+    """Catches camera persistence losing JSON values or CRUD state changes."""
+    camera = repository.create_camera(
         {
             "name": "gate",
             "rtsp_url": "rtsp://example.invalid/live",
@@ -18,17 +31,28 @@ def test_camera_crud_and_json_round_trip(tmp_path):
     )
     assert camera["enabled"] is True
     assert camera["detect_classes"] == ["fire"]
-    assert db.update("camera", camera["id"], {"enabled": False})["enabled"] is False
-    assert db.delete("camera", camera["id"])
-    assert db.get("camera", camera["id"]) is None
+    assert repository.update_camera(camera["id"], {"enabled": False})["enabled"] is False
+    event = repository.create_event(
+        {
+            "camera_id": camera["id"],
+            "event_type": "fire",
+            "confidence": 0.95,
+            "bbox": [1, 2, 3, 4],
+            "status": "new",
+        }
+    )
+    assert event["bbox"] == [1, 2, 3, 4]
+    assert event["ack_by"] is None
+    assert event["ack_user_id"] is None
+    assert repository.delete_camera(camera["id"])
+    assert repository.get_camera(camera["id"]) is None
 
 
-def test_only_one_model_is_active(tmp_path):
-    db = Database(tmp_path / "test.db")
-    db.initialize()
-    first = db.create("model_version", {"name": "a", "file_path": "a.onnx", "classes": ["fire"]})
-    second = db.create("model_version", {"name": "b", "file_path": "b.onnx", "classes": ["fire"]})
-    db.activate_model(first["id"])
-    db.activate_model(second["id"])
-    active = db.list("model_version", where="is_active = 1")
+def test_only_one_model_is_active(repository):
+    """Catches model activation leaving a previously active model enabled."""
+    first = repository.create_model({"name": "a", "file_path": "a.onnx", "classes": ["fire"]})
+    second = repository.create_model({"name": "b", "file_path": "b.onnx", "classes": ["fire"]})
+    repository.activate_model(first["id"])
+    repository.activate_model(second["id"])
+    active = [model for model in repository.list_models() if model["is_active"]]
     assert [item["id"] for item in active] == [second["id"]]

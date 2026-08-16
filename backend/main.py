@@ -7,7 +7,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from backend.api.routes import router
 from backend.core.config import settings
-from backend.db import Database
+from backend.db import Repository
+from backend.db.migrate import run_migrations
+from backend.db.session import create_engine_from_url, create_session_factory
 from backend.engine import build_detector
 from backend.pipeline import RuntimeManager
 from backend.ws import EventHub
@@ -17,11 +19,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    database = Database(settings.database_path)
-    database.initialize()
+    run_migrations(settings.database_url)
+    engine = create_engine_from_url(settings.database_url)
+    repository = Repository(create_session_factory(engine))
     hub = EventHub()
-    runtime = RuntimeManager(settings, database, build_detector(settings.model_path), hub)
-    app.state.db = database
+    runtime = RuntimeManager(settings, repository, build_detector(settings.model_path), hub)
+    app.state.repository = repository
     app.state.hub = hub
     app.state.runtime = runtime
     await runtime.start()
@@ -29,6 +32,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await runtime.stop()
+        engine.dispose()
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)

@@ -10,7 +10,7 @@ from typing import Any
 
 from backend.core.config import Settings
 from backend.core.notifier import FeishuNotifier
-from backend.db import Database
+from backend.db import Repository
 from backend.engine import Detector, build_detector
 from backend.rules import RuleEngine
 from backend.stream.capture import CaptureWorker
@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 
 
 class RuntimeManager:
-    def __init__(self, settings: Settings, db: Database, detector: Detector, hub: EventHub):
+    def __init__(self, settings: Settings, repository: Repository, detector: Detector, hub: EventHub):
         self.settings = settings
-        self.db = db
+        self.repository = repository
         self.detector = detector
         self.hub = hub
         self.frames = DropOldestQueue(settings.queue_size)
@@ -83,7 +83,7 @@ class RuntimeManager:
     async def _reconcile_loop(self) -> None:
         while True:
             self._reconcile_model()
-            enabled = {camera["id"]: camera for camera in self.db.list("camera", where="enabled = 1")}
+            enabled = {camera["id"]: camera for camera in self.repository.list_enabled_cameras()}
             for camera_id in set(self.captures) - set(enabled):
                 self.captures.pop(camera_id).stop()
                 self.camera_signatures.pop(camera_id, None)
@@ -100,10 +100,9 @@ class RuntimeManager:
             await asyncio.sleep(self.settings.reconcile_interval)
 
     def _reconcile_model(self) -> None:
-        active = self.db.list("model_version", where="is_active = 1")
-        if not active:
+        model = self.repository.get_active_model()
+        if not model:
             return
-        model = active[0]
         signature = (model["id"], model["file_path"])
         if signature == self.model_signature:
             return
@@ -130,7 +129,7 @@ class RuntimeManager:
                 self.frames.task_done()
 
     def _process_frame(self, frame: Frame) -> None:
-        camera = self.db.get("camera", frame.camera_id)
+        camera = self.repository.get_camera(frame.camera_id)
         if not camera or not camera["enabled"]:
             return
         detections = self.detector.predict(frame.image)
@@ -144,8 +143,7 @@ class RuntimeManager:
         self._publish_preview(frame)
         for event in events:
             snapshot_path = self._save_snapshot(frame)
-            record = self.db.create(
-                "detection_event",
+            record = self.repository.create_event(
                 {
                     "camera_id": frame.camera_id,
                     "event_type": event.event_type,
@@ -153,7 +151,7 @@ class RuntimeManager:
                     "bbox": list(event.bbox),
                     "snapshot_path": snapshot_path,
                     "status": "new",
-                },
+                }
             )
             self.created_events += 1
             self.notifier.send(record)
