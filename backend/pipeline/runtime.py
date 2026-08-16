@@ -47,6 +47,7 @@ class RuntimeManager:
         self.model_signature: tuple[int, str] | None = None
 
     async def start(self) -> None:
+        self.reconcile_once()
         if not self.settings.enable_runtime:
             return
         self.loop = asyncio.get_running_loop()
@@ -89,7 +90,7 @@ class RuntimeManager:
 
     async def _reconcile_loop(self) -> None:
         while True:
-            self._reconcile_model()
+            self.reconcile_once()
             enabled = {camera["id"]: camera for camera in self.repository.list_enabled_cameras()}
             for camera_id in set(self.captures) - set(enabled):
                 self.captures.pop(camera_id).stop()
@@ -106,7 +107,8 @@ class RuntimeManager:
                 self.camera_signatures[camera_id] = signature
             await asyncio.sleep(self.settings.reconcile_interval)
 
-    def _reconcile_model(self) -> None:
+    def reconcile_once(self) -> None:
+        """Synchronously load the database-active model into the shared provider."""
         model = self.repository.get_active_model()
         if not model:
             return
@@ -125,6 +127,10 @@ class RuntimeManager:
         self.detector_provider.replace(replacement, model_version_id=model["id"])
         self.model_signature = signature
         logger.info("model_activation_succeeded model_id=%s", model["id"])
+
+    def _reconcile_model(self) -> None:
+        """Compatibility shim for callers of the former private helper."""
+        self.reconcile_once()
 
     def _process(self) -> None:
         while not self.stop_event.is_set():

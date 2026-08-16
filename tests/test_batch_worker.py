@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import asyncio
 import time
 from datetime import datetime, timezone
 
@@ -10,6 +11,8 @@ import pytest
 
 from backend.batch import BatchRepository, PendingImage, annotate
 from backend.batch.worker import BatchWorker
+from backend import main as main_module
+from backend.core.config import Settings
 from backend.db.migrate import run_migrations
 from backend.db.models import ModelVersion, User
 from backend.db.session import create_engine_from_url, create_session_factory
@@ -145,3 +148,67 @@ def test_annotation_is_deterministic_and_clamps_out_of_bounds_boxes():
     assert np.array_equal(first, second)
     assert first.shape == image.shape
     assert not np.array_equal(first, image)
+
+
+def test_app_startup_recovery_uses_database_active_model_before_batch_claim(
+    tmp_path,
+    monkeypatch,
+):
+    database_url = "sqlite:///" + (tmp_path / "startup.db").as_posix()
+    upload_dir = tmp_path / "uploads"
+    run_migrations(database_url)
+    engine = create_engine_from_url(database_url)
+    session_factory = create_session_factory(engine)
+    with session_factory.begin() as session:
+        owner = User(
+            username="owner",
+            password_hash="unused",
+            role="user",
+            enabled=True,
+            must_change_password=False,
+        )
+        model = ModelVersion(
+            name="database-active",
+            file_path="opaque/active-model.onnx",
+            runtime="onnx-fp32",
+            classes='["helmet"]',
+            is_active=True,
+        )
+        session.add_all([owner, model])
+        session.flush()
+        owner_id, model_id = owner.id, model.id
+    repository = BatchRepository(session_factory, clock=lambda: NOW)
+    storage = LocalFileStorage(upload_dir)
+    source_key = storage.save(io.BytesIO(_jpeg_bytes()), "batch-source", "jpg")
+    job = repository.create_job(owner_id, [PendingImage("recover.jpg", source_key)])
+    assert repository.claim_next_image() is not None
+    engine.dispose()
+
+    monkeypatch.setattr(
+        "backend.pipeline.runtime.build_detector",
+        lambda _path: FakeDetector(),
+    )
+    app = main_module.create_app(
+        Settings(
+            database_url=database_url,
+            upload_dir=upload_dir,
+            model_path=None,
+            enable_runtime=False,
+        )
+    )
+
+    async def exercise() -> None:
+        async with app.router.lifespan_context(app):
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                current = app.state.batch_repository.get_job(job.id)
+                if current is not None and current.status == "completed":
+                    return
+                await asyncio.sleep(0.01)
+            raise AssertionError("recovered batch image was not completed")
+
+    asyncio.run(exercise())
+
+    image = repository.list_images(job.id)[0]
+    assert image.status == "completed"
+    assert image.model_version_id == model_id

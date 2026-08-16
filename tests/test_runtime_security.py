@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from backend.core.config import Settings
@@ -72,3 +73,30 @@ def test_model_reconciliation_logs_stable_fields_without_local_path(
     result = provider.predict_batch(object())
     assert result.detections == [marker]
     assert result.model_version_id == 17
+
+
+def test_start_loads_active_model_even_when_camera_runtime_is_disabled(
+    tmp_path,
+    monkeypatch,
+):
+    """Batch inference must receive the DB-active model before start returns."""
+    model_path = str(tmp_path / "active.onnx")
+    repository = ActiveModelRepository({"id": 23, "file_path": model_path})
+    provider = DetectorProvider(NoopDetector(), model_version_id=None)
+    manager = RuntimeManager(
+        Settings(enable_runtime=False),
+        repository,
+        provider,
+        EventHub(),
+    )
+
+    class ActiveDetector:
+        def predict(self, _image: object) -> list[object]:
+            return []
+
+    monkeypatch.setattr(runtime_module, "build_detector", lambda _path: ActiveDetector())
+
+    asyncio.run(manager.start())
+
+    assert provider.available is True
+    assert provider.predict_batch(object()).model_version_id == 23
