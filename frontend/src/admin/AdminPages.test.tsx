@@ -7,6 +7,7 @@ import { BrandProvider } from "../brand/BrandProvider";
 import { AlarmGroupsPage } from "./groups/AlarmGroupsPage";
 import { CameraPage } from "./cameras/CameraPage";
 import { ModelsPage } from "./models/ModelsPage";
+import { PeoplePage } from "./people/PeoplePage";
 import { UsersPage } from "./users/UsersPage";
 import { SiteSettingsPage } from "./settings/SiteSettingsPage";
 import { AuditPage } from "./audit/AuditPage";
@@ -143,4 +144,54 @@ it("paginates audit records without rendering audit details", async () => {
   expect(screen.queryByText(/rtsp_url/)).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "下一页" }));
   await waitFor(() => expect(paths.some((path) => path.includes("offset=50"))).toBe(true));
+});
+
+it("keeps the people delete dialog open and announces a failed deletion", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === "/api/persons/2" && init?.method === "DELETE") return json({ message: "联系人仍被告警组使用" }, 409);
+    if (path === "/api/persons") return json([{ id: 2, name: "王工", phone: null, feishu_id: null, dept: "安全部", created_at: "2026-08-16T00:00:00Z" }]);
+    throw new Error(`Unexpected request ${path}`);
+  }));
+
+  renderPage(<PeoplePage />);
+  await userEvent.click(await screen.findByRole("button", { name: "删除王工" }));
+  const dialog = screen.getByRole("dialog", { name: "删除联系人“王工”" });
+  await userEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("联系人仍被告警组使用");
+  expect(dialog).toBeInTheDocument();
+});
+
+it("announces model activation failure inside the confirmation dialog", async () => {
+  const model = { id: 6, name: "helmet-v3", file_path: "D:\\private\\helmet.onnx", runtime: "onnx-fp32", classes: ["helmet"], map50: 0.91, is_active: false, created_at: "2026-08-16T00:00:00Z" };
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === "/api/models/6/activate" && init?.method === "POST") return json({ message: "模型加载失败" }, 409);
+    if (path === "/api/models") return json([model]);
+    throw new Error(`Unexpected request ${path}`);
+  }));
+
+  renderPage(<ModelsPage />);
+  await userEvent.click(await screen.findByRole("button", { name: "激活helmet-v3" }));
+  const dialog = screen.getByRole("dialog", { name: "激活模型“helmet-v3”" });
+  await userEvent.click(within(dialog).getByRole("button", { name: "确认激活" }));
+
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("模型加载失败");
+});
+
+it("announces password reset failure inside the confirmation dialog", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === "/api/users/3/reset-password" && init?.method === "POST") return json({ message: "无法重置最后一个管理员" }, 409);
+    if (path === "/api/users") return json([{ id: 3, username: "operator", role: "user", enabled: true, must_change_password: false, created_at: "2026-08-16T00:00:00Z", updated_at: "2026-08-16T00:00:00Z" }]);
+    throw new Error(`Unexpected request ${path}`);
+  }));
+
+  renderPage(<UsersPage />);
+  await userEvent.click(await screen.findByRole("button", { name: "重置operator的密码" }));
+  const dialog = screen.getByRole("dialog", { name: "重置用户“operator”的密码" });
+  await userEvent.click(within(dialog).getByRole("button", { name: "确认重置" }));
+
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("无法重置最后一个管理员");
 });

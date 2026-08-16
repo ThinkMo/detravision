@@ -35,6 +35,7 @@
 .admin-dialog { width: min(100%, 30rem); padding: 1.2rem; border-radius: var(--radius-lg); background: #fff; box-shadow: var(--shadow-md); }
 .admin-dialog h2 { margin-top: 0; }
 .admin-dialog .danger-button { background: var(--color-danger); }
+.admin-dialog__error { padding: .65rem .75rem; color: var(--color-danger); border: 1px solid #efc7c3; border-radius: var(--radius-sm); background: #fff0ef; }
 .temporary-password { display: block; margin: 1rem 0; padding: .8rem; border-radius: var(--radius-sm); background: #eef3f1; font: 700 1.05rem ui-monospace, monospace; user-select: all; }
 .brand-preview { grid-template-columns: auto 1fr; align-items: center; }
 .brand-preview > span { display: grid; width: 3.5rem; height: 3.5rem; place-items: center; overflow: hidden; color: #fff; border-radius: var(--radius-md); background: var(--color-sidebar); font-size: 1.4rem; font-weight: 800; }
