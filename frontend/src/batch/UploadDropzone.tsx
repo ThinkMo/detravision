@@ -1,5 +1,5 @@
 import { ImagePlus, Trash2, UploadCloud } from "lucide-react";
-import { type ChangeEvent, type DragEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, type DragEvent, useEffect, useRef, useState } from "react";
 
 const MAX_IMAGES = 20;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -78,12 +78,6 @@ export function UploadDropzone({
     event.preventDefault();
     if (!pending) addFiles(Array.from(event.dataTransfer.files));
   };
-  const activate = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (!pending && (event.key === "Enter" || event.key === " ")) {
-      event.preventDefault();
-      input.current?.click();
-    }
-  };
   const remove = (key: string) => setItems((current) => current.filter((item) => {
     if (item.key !== key) return true;
     URL.revokeObjectURL(item.url);
@@ -96,17 +90,13 @@ export function UploadDropzone({
       <div className="batch-panel__heading"><div><p>NEW RECOGNITION</p><h2 id="batch-upload-title">上传图片识别</h2></div><span>{items.length} / 20</span></div>
       <div
         className="batch-dropzone"
-        role="button"
-        tabIndex={pending ? -1 : 0}
-        aria-disabled={pending}
-        onClick={() => !pending && input.current?.click()}
-        onKeyDown={activate}
         onDragOver={(event) => event.preventDefault()}
         onDrop={drop}
       >
         <UploadCloud aria-hidden="true" size={28} />
         <strong>拖放多张图片，或点击选择</strong>
         <span>PNG、JPEG、WebP · 每张不超过 10 MB · 最多 20 张</span>
+        <button type="button" className="batch-picker" disabled={pending} onClick={() => input.current?.click()}>选择图片</button>
         <input ref={input} className="sr-only" aria-label="选择识别图片" type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple disabled={pending} onChange={change} />
       </div>
       {message ? <p className="batch-alert" role="alert">{message}</p> : null}

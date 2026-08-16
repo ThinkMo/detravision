@@ -127,6 +127,7 @@ export interface BatchImageResult {
   error_message: string | null;
   model_version_id: number | null;
   detections: BatchDetection[];
+  preview_url: string;
   result_url: string;
   created_at: string;
   updated_at: string;
