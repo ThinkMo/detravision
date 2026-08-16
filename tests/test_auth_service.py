@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError
 
 from backend.auth import (
     AuthService,
@@ -63,6 +64,14 @@ def bootstrap(service: AuthService) -> None:
 def count_rows(session_factory, model) -> int:
     with session_factory() as session:
         return session.scalar(select(func.count()).select_from(model)) or 0
+
+
+def mysql_operational_error(code: int) -> OperationalError:
+    return OperationalError(
+        "INSERT INTO user (...) VALUES (...) ",
+        {},
+        Exception(code, "synthetic MySQL lock failure"),
+    )
 
 
 def test_password_hash_verifies_only_the_original_password():
@@ -136,6 +145,102 @@ def test_concurrent_bootstrap_returns_once_without_overwriting_password(
         verify_password(candidate, user.password_hash)
         for candidate in (first_password, second_password)
     ) == 1
+
+
+@pytest.mark.parametrize("mysql_code", [1205, 1213])
+def test_bootstrap_retries_recognized_mysql_lock_failure_once(
+    auth_service,
+    session_factory,
+    monkeypatch,
+    mysql_code,
+):
+    real_bootstrap_once = auth_service._bootstrap_admin_once
+    attempts = 0
+
+    def fail_once_then_bootstrap() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise mysql_operational_error(mysql_code)
+        real_bootstrap_once()
+
+    monkeypatch.setattr(auth_service, "_bootstrap_admin_once", fail_once_then_bootstrap)
+
+    auth_service.bootstrap_admin()
+
+    user = auth_service.users.by_username("admin")
+    assert user is not None
+    assert verify_password("admin123456", user.password_hash)
+    assert attempts == 2
+    assert count_rows(session_factory, User) == 1
+
+
+def test_bootstrap_returns_after_mysql_deadlock_when_winner_is_visible(
+    auth_service,
+    session_factory,
+    monkeypatch,
+):
+    winner_password = "Winner-password-123"
+    attempts = 0
+
+    def deadlock_after_winner_commits() -> None:
+        nonlocal attempts
+        attempts += 1
+        with session_factory.begin() as session:
+            session.add(
+                User(
+                    username="admin",
+                    password_hash=hash_password(winner_password),
+                    role="admin",
+                    enabled=True,
+                    must_change_password=True,
+                )
+            )
+        raise mysql_operational_error(1213)
+
+    monkeypatch.setattr(auth_service, "_bootstrap_admin_once", deadlock_after_winner_commits)
+
+    auth_service.bootstrap_admin()
+
+    user = auth_service.users.by_username("admin")
+    assert user is not None
+    assert verify_password(winner_password, user.password_hash)
+    assert attempts == 1
+    assert count_rows(session_factory, User) == 1
+
+
+def test_bootstrap_bounds_repeated_mysql_deadlock_retries(auth_service, monkeypatch):
+    attempts = 0
+
+    def always_deadlock() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise mysql_operational_error(1213)
+
+    monkeypatch.setattr(auth_service, "_bootstrap_admin_once", always_deadlock)
+
+    with pytest.raises(OperationalError) as caught:
+        auth_service.bootstrap_admin()
+
+    assert caught.value.orig.args[0] == 1213
+    assert attempts == 2
+
+
+def test_bootstrap_reraises_non_retryable_mysql_operational_error(
+    auth_service,
+    monkeypatch,
+):
+    connection_error = mysql_operational_error(1045)
+
+    def fail_authentication() -> None:
+        raise connection_error
+
+    monkeypatch.setattr(auth_service, "_bootstrap_admin_once", fail_authentication)
+
+    with pytest.raises(OperationalError) as caught:
+        auth_service.bootstrap_admin()
+
+    assert caught.value is connection_error
 
 
 def test_bootstrap_does_not_add_admin_when_any_user_exists(auth_service, session_factory):

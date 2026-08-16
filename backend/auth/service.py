@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.core.config import Settings
@@ -67,6 +67,9 @@ class UserReader:
 
 
 class AuthService:
+    _BOOTSTRAP_ATTEMPTS = 2
+    _MYSQL_TRANSIENT_LOCK_ERRORS = frozenset({1205, 1213})
+
     def __init__(
         self,
         session_factory: sessionmaker[Session],
@@ -88,24 +91,41 @@ class AuthService:
         )
 
     def bootstrap_admin(self) -> None:
-        last_error: IntegrityError | None = None
-        for _attempt in range(2):
+        last_error: IntegrityError | OperationalError | None = None
+        for _attempt in range(self._BOOTSTRAP_ATTEMPTS):
             try:
                 self._bootstrap_admin_once()
                 return
             except IntegrityError as exc:
                 last_error = exc
-                with self._session_factory() as session:
-                    if session.scalar(select(User.id).limit(1)) is not None:
-                        return
+            except OperationalError as exc:
+                if not self._is_mysql_transient_lock_error(exc):
+                    raise
+                last_error = exc
+            if self._bootstrap_winner_exists():
+                return
         assert last_error is not None
         raise last_error
 
+    def _bootstrap_winner_exists(self) -> bool:
+        with self._session_factory() as session:
+            return (
+                session.scalar(select(User.id).where(User.username == "admin"))
+                is not None
+            )
+
+    @classmethod
+    def _is_mysql_transient_lock_error(cls, exc: OperationalError) -> bool:
+        original_args = getattr(exc.orig, "args", ())
+        return bool(
+            original_args
+            and isinstance(original_args[0], int)
+            and original_args[0] in cls._MYSQL_TRANSIENT_LOCK_ERRORS
+        )
+
     def _bootstrap_admin_once(self) -> None:
         with self._session_factory.begin() as session:
-            existing_id = session.scalar(
-                select(User.id).order_by(User.id).limit(1).with_for_update()
-            )
+            existing_id = session.scalar(select(User.id).order_by(User.id).limit(1))
             if existing_id is not None:
                 return
 
