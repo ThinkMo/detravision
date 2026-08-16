@@ -170,13 +170,45 @@ def _run_real_model_smoke(
             completed = [
                 image for image in job["images"] if image["status"] == "completed"
             ]
-            assert completed
+            assert len(completed) == len(images)
             assert all(image["result_url"] for image in completed)
+            assert all(image["preview_url"] for image in completed)
 
-            image_download = client.get(completed[0]["result_url"])
-            assert image_download.status_code == 200
-            assert image_download.headers["content-type"].startswith("image/jpeg")
-            assert image_download.content.startswith(b"\xff\xd8")
+            detections = [
+                detection
+                for image in completed
+                for detection in image["detections"]
+            ]
+            assert detections
+            assert all(
+                {"label", "confidence", "bbox"}.issubset(detection)
+                for detection in detections
+            )
+            assert any(
+                detection["label"] in {"person", "helmet"}
+                for detection in detections
+            )
+            no_helmet_count = sum(
+                detection["label"] == "no_helmet" for detection in detections
+            )
+            assert 0 <= no_helmet_count <= len(detections)
+
+            for image in completed:
+                preview = client.get(image["preview_url"])
+                assert preview.status_code == 200
+                assert preview.headers["content-type"].startswith("image/jpeg")
+                assert preview.headers["content-disposition"].startswith("inline;")
+                assert preview.headers["x-content-type-options"] == "nosniff"
+                assert preview.content.startswith(b"\xff\xd8")
+
+            for image in completed:
+                image_download = client.get(image["result_url"])
+                assert image_download.status_code == 200
+                assert image_download.headers["content-type"].startswith("image/jpeg")
+                assert image_download.headers["content-disposition"].startswith(
+                    "attachment;"
+                )
+                assert image_download.content.startswith(b"\xff\xd8")
 
             archive_response = client.get(f"/api/batch-jobs/{job_id}/download")
             assert archive_response.status_code == 200
@@ -193,6 +225,11 @@ def _run_real_model_smoke(
                 "job_status": job["status"],
                 "image_statuses": [image["status"] for image in job["images"]],
                 "detections": [len(image["detections"]) for image in job["images"]],
+                "detection_labels": [
+                    [detection["label"] for detection in image["detections"]]
+                    for image in job["images"]
+                ],
+                "no_helmet_count": no_helmet_count,
             }
         )
     except BaseException:
@@ -236,5 +273,7 @@ def test_real_model_batch_smoke_uses_isolated_sqlite_and_downloads(tmp_path):
         f"images={','.join(result['images'])} "
         f"job_status={result['job_status']} "
         f"image_statuses={','.join(result['image_statuses'])} "
-        f"detections={','.join(str(value) for value in result['detections'])}"
+        f"detections={','.join(str(value) for value in result['detections'])} "
+        f"detection_labels={'|'.join(','.join(labels) for labels in result['detection_labels'])} "
+        f"no_helmet_count={result['no_helmet_count']}"
     )
