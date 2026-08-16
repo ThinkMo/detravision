@@ -57,7 +57,10 @@ def application_lifespan(app_settings: Settings):
             build_detector(app_settings.model_path),
             model_version_id=None,
         )
-        batch_repository = BatchRepository(session_factory)
+        batch_repository = BatchRepository(
+            session_factory,
+            retention_days=app_settings.batch_retention_days,
+        )
         batch_worker = BatchWorker(batch_repository, detector_provider, file_storage)
         retention_cleaner = RetentionCleaner(batch_repository, file_storage)
         runtime = RuntimeManager(

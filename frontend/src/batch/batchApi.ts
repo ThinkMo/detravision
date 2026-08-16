@@ -11,13 +11,19 @@ export interface BatchJobFilters {
   userId?: string;
 }
 
-function listPath(filters: BatchJobFilters) {
+function endOfUtcDay(value: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? `${value}T23:59:59.999Z`
+    : new Date(value).toISOString();
+}
+
+export function batchJobsPath(filters: BatchJobFilters) {
   const params = new URLSearchParams();
   params.set("page", String(filters.page ?? 1));
   params.set("page_size", String(filters.pageSize ?? 20));
   if (filters.status) params.set("status", filters.status);
   if (filters.createdFrom) params.set("created_from", new Date(filters.createdFrom).toISOString());
-  if (filters.createdTo) params.set("created_to", new Date(filters.createdTo).toISOString());
+  if (filters.createdTo) params.set("created_to", endOfUtcDay(filters.createdTo));
   if (filters.userId) params.set("user_id", filters.userId);
   return `/api/batch-jobs?${params.toString()}`;
 }
@@ -25,7 +31,7 @@ function listPath(filters: BatchJobFilters) {
 export function useBatchJobs(filters: BatchJobFilters) {
   return useQuery({
     queryKey: ["batch-jobs", filters],
-    queryFn: () => api.request<BatchJobPage>(listPath(filters)),
+    queryFn: () => api.request<BatchJobPage>(batchJobsPath(filters)),
   });
 }
 

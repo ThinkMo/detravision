@@ -11,6 +11,7 @@
 - 本地账号、服务端会话、管理员/普通用户权限和操作审计
 - 可配置的网站名称与 Logo
 - React 管理控制台：登录、首次改密、安全态势、实时监控、事件中心及管理员配置
+- 多图识别：持久化任务、单图标注结果、历史筛选及 ZIP 下载
 - 配置收敛器：摄像头启停或参数变化后自动启停 RTSP 线程
 - 每路独立解码、全局有界帧队列、满队列丢弃最旧帧
 - Ultralytics 推理适配器；未配置模型时使用空检测器
@@ -125,9 +126,14 @@ npm run dev
 
 ### 本地 SQLite 同源运行
 
-发布式本地运行先生成前端静态文件，再由 FastAPI 同源托管：
+发布式本地运行先生成前端静态文件，再由 FastAPI 同源托管。若要使用实时或多图识别，必须把 `MODEL_PATH` 指向实际存在的 Ultralytics 兼容模型；本仓库训练结果的默认示例是 `runs/detect/train-3/weights/best.pt`：
 
 ```powershell
+$env:DATABASE_URL = "sqlite:///data/safety_detect.db"
+$env:MODEL_PATH = "runs/detect/train-3/weights/best.pt"
+$env:UPLOAD_DIR = "data/uploads"
+$env:BATCH_RETENTION_DAYS = "30"
+$env:BATCH_WORKER_COUNT = "1"
 cd frontend
 npm ci
 npm run build
@@ -168,7 +174,30 @@ npm run build
 | 摄像头、人员、告警组、模型管理 | 是 | 否 |
 | 网站品牌、用户与审计日志 | 是 | 否 |
 
-前端隐藏无权入口只用于改善体验，实际权限始终由后端校验。多图识别入口属于下一阶段的批量推理模块，本阶段尚不作为管理控制台验收项。
+前端隐藏无权入口只用于改善体验，实际权限始终由后端校验。管理员与普通用户都可以创建多图识别任务；普通用户只能查看、下载自己的任务，管理员可以查看全部任务并按创建用户筛选。
+
+### 多图识别
+
+1. 从侧栏进入“多图识别”。一次选择 1～20 张 PNG、JPEG 或 WebP，每张编码文件最大 10 MiB；服务端还会校验扩展名、实际图片格式、可解码性和像素上限。
+2. 点击“开始识别”后，任务依次经过 `queued`（等待处理）、`processing`（处理中），最后变成 `completed`（全部成功）、`partial_failed`（部分失败）或 `failed`（全部失败）。任务详情页每秒轮询，进入最终状态后停止轮询。
+3. 成功图片可单独下载 JPEG 标注图；任务 ZIP 包只包含 `results.json` 清单和成功图片的标注图，不包含原图或内部存储键。失败图片会显示稳定错误码对应的安全提示。
+4. 历史列表的开始、结束日期均按所选 UTC 自然日筛选，结束日期包含当天全天。普通用户只能看到自己的任务；无权访问其他用户任务时返回 404，避免泄露任务是否存在。
+
+`MODEL_PATH` 为空时，实时页面仍可打开，但多图上传会返回 HTTP 409 `model_unavailable`，不会读取上传内容、创建数据库记录或遗留文件。若 `MODEL_PATH` 指向不存在的文件，服务会在启动时明确失败；更换 PT、ONNX 或 Engine 模型前应先用对应 Ultralytics 运行环境验证兼容性。
+
+原图和标注图分别保存在 `UPLOAD_DIR/batch-source` 与 `UPLOAD_DIR/batch-result` 的不透明键下。任务默认保留 30 天；清理器在启动时运行一次，之后每 6 小时运行一次。只有任务的全部文件删除成功后才删除数据库记录；文件或数据库删除失败时记录会保留，并在下一个清理周期重试。不要绕过服务直接修改这些目录。
+
+当前版本强制 `BATCH_WORKER_COUNT=1`。批量任务和实时画面共享同一个模型，实时请求具有优先级，批量工作线程则在图片之间让出模型；这能避免同一 GPU 上的并发模型调用，但批量推理仍会占用显存和计算资源，可能降低实时帧率。显存紧张时应减少实时路数或改用更小模型，不要增加批量工作线程。
+
+使用已训练模型和两张真实测试图片执行隔离烟测（测试数据库、上传文件及 Ultralytics 配置均写入 pytest 临时目录）：
+
+```powershell
+$env:REAL_MODEL_PATH = (Resolve-Path "runs/detect/train-3/weights/best.pt").Path
+$env:REAL_MODEL_TEST_IMAGE_DIR = (Resolve-Path "datasets/construction-ppe/images/test").Path
+.\.venv\Scripts\python.exe -m pytest tests/test_batch_end_to_end.py -m model -v -s
+```
+
+烟测会启动本地 SQLite 应用、使用默认 `admin` 登录并完成首次强制改密、上传两张真实图片、等待后台工作线程结束，然后验证单张标注图和任务 ZIP 下载。它不会启动训练、摄像头、MySQL 或部署流程。
 
 ### 品牌与实时连接
 
@@ -188,6 +217,8 @@ npm run build
 | `UPLOAD_DIR` | `data/uploads` | Logo 与后续上传文件的本地存储目录 |
 | `SNAPSHOT_DIR` | `data/snapshots` | 告警抓拍目录 |
 | `MODEL_PATH` | 空 | 启动时加载的 PT/ONNX/Engine 模型 |
+| `BATCH_RETENTION_DAYS` | `30` | 多图任务、原图及标注结果的保留天数，必须大于 0 |
+| `BATCH_WORKER_COUNT` | `1` | 当前版本固定为 1；其他值会拒绝启动 |
 | `WORKER_COUNT` | `1` | 推理线程数；单 GPU 建议从 1 开始压测 |
 | `FRAME_QUEUE_SIZE` | `8` | 跨摄像头共享队列容量 |
 | `RECONCILE_INTERVAL` | `3` | 配置收敛间隔（秒） |
@@ -303,6 +334,10 @@ Substitute your actual training run directory when it differs from
 | PATCH | `/api/events/{id}` | 确认或关闭事件 |
 | GET / POST | `/api/models` | 模型版本管理 |
 | POST | `/api/models/{id}/activate` | 原子激活单一模型版本 |
+| GET / POST | `/api/batch-jobs` | 查询或创建多图识别任务 |
+| GET | `/api/batch-jobs/{id}` | 查询任务与逐图结果 |
+| GET | `/api/batch-jobs/{id}/images/{image_id}/download` | 下载单张标注图 |
+| GET | `/api/batch-jobs/{id}/download` | 下载任务结果 ZIP |
 
 ## 生产化路线
 
@@ -318,3 +353,4 @@ Substitute your actual training run directory when it differs from
 - WebSocket 实时画面为 JPEG 帧，不适合高帧率或大规模观看端；规模化时应换 WebRTC/HLS。
 - 当前去重以摄像头和事件类型为粒度，尚未接入目标追踪器。
 - 模型兼容性由 Ultralytics 运行时校验；生产部署应在激活前增加独立的模型预热和验收流程。
+- 批量任务当前使用单进程本地磁盘与单个工作线程；多实例调度和对象存储尚未验收。

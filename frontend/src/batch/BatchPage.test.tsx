@@ -5,7 +5,9 @@ import { type ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, expect, it, vi } from "vitest";
 import { AuthProvider } from "../auth/AuthProvider";
+import { batchJobsPath } from "./batchApi";
 import { BatchPage } from "./BatchPage";
+import { UploadDropzone } from "./UploadDropzone";
 
 const currentUser = {
   id: 7,
@@ -103,6 +105,31 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+});
+
+it("exposes determinate upload progress to assistive technology", async () => {
+  vi.stubGlobal("URL", {
+    ...URL,
+    createObjectURL: vi.fn(() => "blob:progress"),
+    revokeObjectURL: vi.fn(),
+  });
+  const onSubmit = vi.fn();
+  const view = render(<UploadDropzone pending={false} progress={0} onSubmit={onSubmit} />);
+  await userEvent.upload(
+    screen.getByLabelText("选择识别图片"),
+    new File(["image"], "progress.png", { type: "image/png" }),
+  );
+  view.rerender(<UploadDropzone pending progress={37} onSubmit={onSubmit} />);
+
+  expect(screen.getByRole("progressbar", { name: "上传进度" })).toHaveAttribute("aria-valuenow", "37");
+});
+
+it("treats the end-date filter as the inclusive whole UTC day", () => {
+  const path = batchJobsPath({ createdFrom: "2026-08-15", createdTo: "2026-08-16" });
+  const query = new URL(path, "http://testserver").searchParams;
+
+  expect(query.get("created_from")).toBe("2026-08-15T00:00:00.000Z");
+  expect(query.get("created_to")).toBe("2026-08-16T23:59:59.999Z");
 });
 
 it("rejects a twenty-first file before upload", async () => {

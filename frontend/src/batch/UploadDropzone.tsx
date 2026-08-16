@@ -116,7 +116,7 @@ export function UploadDropzone({
             {items.map((item) => <li key={item.key}><img src={item.url} alt="" /><span><strong>{item.file.name}</strong><small>{formatBytes(item.file.size)}</small></span><button type="button" aria-label={`移除 ${item.file.name}`} disabled={pending} onClick={(event) => { event.stopPropagation(); remove(item.key); }}><Trash2 aria-hidden="true" size={16} /></button></li>)}
           </ul>
           <div className="batch-upload__footer"><span>总计 {formatBytes(totalBytes)}</span><button type="button" disabled={pending} onClick={() => onSubmit(items.map((item) => item.file))}><ImagePlus aria-hidden="true" size={17} />{pending ? "正在上传…" : "开始识别"}</button></div>
-          {pending ? <div className="batch-progress" aria-label={`上传进度 ${progress}%`}><span style={{ width: `${progress}%` }} /></div> : null}
+          {pending ? <div className="batch-progress" role="progressbar" aria-label="上传进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><span style={{ width: `${progress}%` }} /></div> : null}
         </>
       ) : null}
     </section>
