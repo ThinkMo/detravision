@@ -597,13 +597,12 @@ git commit -m "feat: add configurable site branding"
 
 ---
 
-### Task 7: Foundation Integration, MySQL Verification, and Documentation
+### Task 7: Foundation Integration, SQLite Verification, and Documentation
 
 **Files:**
 - Modify: .env.example
 - Modify: README.md
 - Modify: tests/conftest.py
-- Create: deploy/docker-compose.mysql-test.yml
 - Modify: backend/main.py
 
 **Interfaces:**
@@ -639,17 +638,13 @@ Run: .venv\Scripts\python.exe -m pytest -v
 
 Expected: all tests PASS.
 
-- [ ] **Step 5: Verify MySQL**
+- [ ] **Step 5: Preserve deferred MySQL verification**
 
-Run: docker compose -f deploy/docker-compose.mysql-test.yml up -d
-
-Run: .venv\Scripts\python.exe -m pytest -m mysql -v
-
-Expected: migration and repository tests PASS against MySQL 8 with utf8mb4.
+Keep the TEST_MYSQL_URL-gated migration and repository tests collected and skipped when no URL is configured. Document that live MySQL acceptance and deployment are deferred; do not install or start Docker/MySQL in this plan run.
 
 - [ ] **Step 6: Commit**
 
 ~~~powershell
-git add .env.example README.md deploy tests/conftest.py tests/test_app_startup.py backend/main.py
+git add .env.example README.md tests/conftest.py tests/test_app_startup.py backend/main.py
 git commit -m "docs: complete authenticated platform setup"
 ~~~
