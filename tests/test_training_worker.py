@@ -186,6 +186,29 @@ def test_result_rejects_acceptance_inconsistent_with_metrics():
 
 
 @pytest.mark.parametrize(
+    ("metric_path", "value"),
+    [
+        (("metrics", "precision"), 999.0),
+        (("metrics", "recall"), -0.1),
+        (("metrics", "classes", "no_helmet", "map50"), 999.0),
+        (("metrics", "classes", "helmet", "recall"), -0.1),
+    ],
+)
+def test_result_rejects_metrics_outside_probability_range(
+    metric_path: tuple[str, ...], value: float
+):
+    """Catches corrupt overall or per-class ratios being accepted as metrics."""
+    payload = valid_completed_result()
+    target = payload
+    for key in metric_path[:-1]:
+        target = target[key]  # type: ignore[index,assignment]
+    target[metric_path[-1]] = value  # type: ignore[index]
+
+    with pytest.raises(ValueError):
+        TrainingResult.from_json(payload)
+
+
+@pytest.mark.parametrize(
     ("error_code", "error_message"),
     [
         ("arbitrary", "Training failed."),
@@ -367,6 +390,8 @@ class FakeYOLO:
             raise RuntimeError("secret failure at D:\\private\\customer")
         self.trainer.epoch = 3
         self.callbacks["on_fit_epoch_end"](self.trainer)
+        if self.fail_stage == "missing_best":
+            return SimpleNamespace(save_dir=Path(str(kwargs["project"])) / "train")
         weights = Path(str(kwargs["project"])) / str(kwargs["name"]) / "weights"
         weights.mkdir(parents=True)
         (weights / "best.pt").write_bytes(b"best checkpoint")
@@ -580,6 +605,23 @@ def test_worker_fails_closed_for_missing_or_escaped_confusion_matrix(
     result = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
     assert result["error_code"] == "evaluation_failed"
     assert not (run_dir / "confusion_matrix.png").exists()
+
+
+def test_worker_classifies_missing_best_as_training_artifact_failure(tmp_path: Path):
+    """Catches absent training output being mislabeled as an invalid dataset."""
+    manifest_path, payload = write_manifest(tmp_path)
+    FakeYOLO.fail_stage = "missing_best"
+
+    assert main(
+        ["--manifest", str(manifest_path)],
+        yolo_cls=FakeYOLO,
+        cuda_available=lambda: False,
+        project_root=tmp_path,
+    ) == 1
+    result = json.loads(
+        (Path(str(payload["run_dir"])) / "result.json").read_text(encoding="utf-8")
+    )
+    assert result["error_code"] == "training_failed"
 
 
 @pytest.mark.parametrize(

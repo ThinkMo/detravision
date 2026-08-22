@@ -93,10 +93,17 @@ def _finite_float(value: object, field: str) -> float:
     return result
 
 
-def _json_float(value: object, field: str) -> float:
+def _probability(value: object, field: str) -> float:
+    result = _finite_float(value, field)
+    if not 0.0 <= result <= 1.0:
+        raise ValueError(f"{field} must be between 0 and 1")
+    return result
+
+
+def _json_probability(value: object, field: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{field} must be a JSON number")
-    return _finite_float(value, field)
+    return _probability(value, field)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,7 +172,7 @@ class TrainingProgress:
             raise ValueError("invalid training progress")
         raw_metrics = _mapping(values.get("metrics"), "progress metrics")
         metrics = {
-            str(name): _json_float(value, f"metrics.{name}")
+            str(name): _json_probability(value, f"metrics.{name}")
             for name, value in raw_metrics.items()
         }
         return cls(current_epoch, total_epochs, metrics)
@@ -248,7 +255,7 @@ class TrainingResult:
 def _optional_metric(value: object, field: str) -> float | None:
     if value is None:
         return None
-    return _json_float(value, field)
+    return _json_probability(value, field)
 
 
 def _validated_metrics(payload: object) -> dict[str, Any]:
@@ -266,16 +273,16 @@ def _validated_metrics(payload: object) -> dict[str, Any]:
                 class_metrics["precision"], f"{name}.precision"
             ),
             "recall": _optional_metric(class_metrics["recall"], f"{name}.recall"),
-            "map50": _json_float(class_metrics["map50"], f"{name}.map50"),
-            "map50_95": _json_float(
+            "map50": _json_probability(class_metrics["map50"], f"{name}.map50"),
+            "map50_95": _json_probability(
                 class_metrics["map50_95"], f"{name}.map50_95"
             ),
         }
     return {
-        "precision": _json_float(values["precision"], "precision"),
-        "recall": _json_float(values["recall"], "recall"),
-        "map50": _json_float(values["map50"], "map50"),
-        "map50_95": _json_float(values["map50_95"], "map50_95"),
+        "precision": _json_probability(values["precision"], "precision"),
+        "recall": _json_probability(values["recall"], "recall"),
+        "map50": _json_probability(values["map50"], "map50"),
+        "map50_95": _json_probability(values["map50_95"], "map50_95"),
         "classes": classes,
     }
 
@@ -323,10 +330,10 @@ def _class_name(names: object, class_id: int) -> str:
 def extract_metrics(metrics: object) -> dict[str, Any]:
     box = getattr(metrics, "box")
     overall = {
-        "precision": _finite_float(getattr(box, "mp"), "precision"),
-        "recall": _finite_float(getattr(box, "mr"), "recall"),
-        "map50": _finite_float(getattr(box, "map50"), "map50"),
-        "map50_95": _finite_float(getattr(box, "map"), "map50_95"),
+        "precision": _probability(getattr(box, "mp"), "precision"),
+        "recall": _probability(getattr(box, "mr"), "recall"),
+        "map50": _probability(getattr(box, "map50"), "map50"),
+        "map50_95": _probability(getattr(box, "map"), "map50_95"),
     }
     ap50_values = getattr(box, "ap50", None)
     ap_values = getattr(box, "ap", None)
@@ -352,17 +359,17 @@ def extract_metrics(metrics: object) -> dict[str, Any]:
         raw_recall = _value_at(recall_values, result_index)
         classes[_class_name(names, class_id)] = {
             "precision": (
-                _finite_float(raw_precision, "class precision")
+                _probability(raw_precision, "class precision")
                 if raw_precision is not None
                 else None
             ),
             "recall": (
-                _finite_float(raw_recall, "class recall")
+                _probability(raw_recall, "class recall")
                 if raw_recall is not None
                 else None
             ),
-            "map50": _finite_float(raw_map50, "class map50"),
-            "map50_95": _finite_float(raw_map50_95, "class map50_95"),
+            "map50": _probability(raw_map50, "class map50"),
+            "map50_95": _probability(raw_map50_95, "class map50_95"),
         }
     return {**overall, "classes": classes}
 
@@ -376,9 +383,9 @@ def meets_acceptance(metrics: Mapping[str, Any]) -> bool:
         if precision is None or recall is None:
             return False
         return (
-            _finite_float(map50, "map50") >= 0.85
-            and _finite_float(precision, "no_helmet precision") >= 0.85
-            and _finite_float(recall, "no_helmet recall") >= 0.90
+            _probability(map50, "map50") >= 0.85
+            and _probability(precision, "no_helmet precision") >= 0.85
+            and _probability(recall, "no_helmet recall") >= 0.90
         )
     except (KeyError, TypeError, ValueError):
         return False

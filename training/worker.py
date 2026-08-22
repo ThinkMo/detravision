@@ -136,7 +136,7 @@ def _is_cuda_oom(exc: BaseException) -> bool:
 
 def _is_dataset_error(exc: BaseException) -> bool:
     text = str(exc).casefold()
-    return isinstance(exc, FileNotFoundError) or any(
+    return any(
         marker in text for marker in ("dataset", "images not found", "data yaml")
     )
 
