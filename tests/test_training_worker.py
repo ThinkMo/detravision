@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -93,6 +94,123 @@ def test_contracts_validate_json_types_and_round_trip(tmp_path: Path):
     assert result.status == "completed"
 
 
+@pytest.mark.parametrize("contract", ["manifest", "progress", "result"])
+def test_contracts_reject_extra_fields(tmp_path: Path, contract: str):
+    """Catches injected commands or unversioned fields crossing JSON boundaries."""
+    if contract == "manifest":
+        payload = manifest_payload(tmp_path, command="format C:")
+        loader = TrainingManifest.from_json
+    elif contract == "progress":
+        payload = {
+            "current_epoch": 1,
+            "total_epochs": 2,
+            "metrics": {},
+            "command": "format C:",
+        }
+        loader = TrainingProgress.from_json
+    else:
+        payload = {
+            "status": "failed",
+            "metrics": None,
+            "accepted": False,
+            "best_sha256": None,
+            "error_code": "training_failed",
+            "error_message": "Training did not produce a valid model.",
+            "command": "format C:",
+        }
+        loader = TrainingResult.from_json
+
+    with pytest.raises(ValueError):
+        loader(payload)
+
+
+def valid_completed_result() -> dict[str, object]:
+    return {
+        "status": "completed",
+        "metrics": extract_metrics(metric_fixture()),
+        "accepted": True,
+        "best_sha256": "a" * 64,
+        "error_code": None,
+        "error_message": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "value"),
+    [
+        (("metrics", "map50"), "0.85"),
+        (("metrics", "map50"), float("nan")),
+        (("metrics", "map50_95"), float("inf")),
+        (("metrics", "classes"), []),
+        (("metrics", "classes", "no_helmet", "precision"), Path("secret.pt")),
+    ],
+)
+def test_result_rejects_non_json_safe_or_malformed_metrics(
+    mutation: tuple[str, ...], value: object
+):
+    """Catches malformed worker metrics being persisted or exposed by the manager."""
+    payload = valid_completed_result()
+    target = payload
+    for key in mutation[:-1]:
+        target = target[key]  # type: ignore[index,assignment]
+    target[mutation[-1]] = value  # type: ignore[index]
+
+    with pytest.raises(ValueError):
+        TrainingResult.from_json(payload)
+
+
+def test_result_rejects_missing_or_extra_metric_keys():
+    """Catches incomplete or silently extended metric schemas reaching persistence."""
+    for changed in ("missing", "extra", "class_missing", "class_extra"):
+        payload = valid_completed_result()
+        metrics = payload["metrics"]
+        if changed == "missing":
+            del metrics["recall"]
+        elif changed == "extra":
+            metrics["accuracy"] = 0.99
+        elif changed == "class_missing":
+            del metrics["classes"]["no_helmet"]["recall"]
+        else:
+            metrics["classes"]["no_helmet"]["accuracy"] = 0.99
+        with pytest.raises(ValueError):
+            TrainingResult.from_json(payload)
+
+
+def test_result_rejects_acceptance_inconsistent_with_metrics():
+    """Catches a forged acceptance flag overriding the documented policy."""
+    payload = valid_completed_result()
+    payload["accepted"] = False
+
+    with pytest.raises(ValueError):
+        TrainingResult.from_json(payload)
+
+
+@pytest.mark.parametrize(
+    ("error_code", "error_message"),
+    [
+        ("arbitrary", "Training failed."),
+        ("training_failed", "x" * 501),
+        ("training_failed", "failed\nD:\\private\\best.pt"),
+        ("training_failed", "failed at /srv/private/best.pt"),
+    ],
+)
+def test_failed_result_rejects_unstable_or_unsafe_errors(
+    error_code: str, error_message: str
+):
+    """Catches arbitrary diagnostics and paths entering result.error fields."""
+    with pytest.raises(ValueError):
+        TrainingResult.from_json(
+            {
+                "status": "failed",
+                "metrics": None,
+                "accepted": False,
+                "best_sha256": None,
+                "error_code": error_code,
+                "error_message": error_message,
+            }
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -170,6 +288,19 @@ def test_extract_metrics_uses_per_class_maps_for_ultralytics_ap_rows():
     assert extracted["classes"]["no_helmet"]["map50_95"] == 0.57
 
 
+def test_extract_metrics_normalizes_library_numeric_scalars_to_json_floats():
+    """Catches non-builtin numeric scalars from Ultralytics breaking extraction."""
+    metrics = metric_fixture()
+    metrics.box.mp = Decimal("0.87")
+    metrics.box.p = [Decimal("0.91"), Decimal("0.92"), Decimal("0.85")]
+
+    extracted = extract_metrics(metrics)
+
+    assert extracted["precision"] == 0.87
+    assert type(extracted["precision"]) is float
+    assert extracted["classes"]["no_helmet"]["precision"] == 0.85
+
+
 @pytest.mark.parametrize(
     ("map50", "precision", "recall", "accepted"),
     [
@@ -222,6 +353,8 @@ class FakeYOLO:
         self.__class__.instances.append(self)
 
     def add_callback(self, name: str, callback):
+        if self.fail_stage == "callback":
+            raise OSError(1455, "D:\\private\\cufft64_11.dll")
         self.callbacks[name] = callback
 
     def train(self, **kwargs):
@@ -233,7 +366,7 @@ class FakeYOLO:
         if self.fail_stage == "train":
             raise RuntimeError("secret failure at D:\\private\\customer")
         self.trainer.epoch = 3
-        self.callbacks["on_train_epoch_end"](self.trainer)
+        self.callbacks["on_fit_epoch_end"](self.trainer)
         weights = Path(str(kwargs["project"])) / str(kwargs["name"]) / "weights"
         weights.mkdir(parents=True)
         (weights / "best.pt").write_bytes(b"best checkpoint")
@@ -244,7 +377,17 @@ class FakeYOLO:
         self.val_calls.append(kwargs)
         if self.fail_stage == "evaluation":
             raise RuntimeError("D:\\private\\test image failed")
-        return metric_fixture()
+        if self.fail_stage == "confusion_outside":
+            save_dir = Path(str(kwargs["project"])).parent / "private-evaluation"
+        else:
+            save_dir = Path(str(kwargs["project"])) / str(kwargs["name"])
+        save_dir.mkdir(parents=True, exist_ok=True)
+        if self.fail_stage != "confusion_missing":
+            (save_dir / "confusion_matrix.png").write_bytes(b"confusion matrix")
+        metrics = metric_fixture()
+        if self.fail_stage != "no_metrics_save_dir":
+            metrics.save_dir = save_dir
+        return metrics
 
 
 @pytest.fixture(autouse=True)
@@ -303,6 +446,10 @@ def test_worker_dispatches_training_progress_test_evaluation_and_digest(
             "batch": -1,
             "device": 0,
             "workers": 0,
+            "project": payload["run_dir"],
+            "name": "test",
+            "exist_ok": True,
+            "plots": True,
         }
     ]
     progress = json.loads(
@@ -324,6 +471,9 @@ def test_worker_dispatches_training_progress_test_evaluation_and_digest(
     assert result["metrics"]["classes"]["no_helmet"]["recall"] == 0.90
     assert canonical_best.read_bytes() == b"best checkpoint"
     assert (canonical_best.parent / "last.pt").read_bytes() == b"last checkpoint"
+    assert (
+        Path(str(payload["run_dir"])) / "confusion_matrix.png"
+    ).read_bytes() == b"confusion matrix"
     assert os.environ["YOLO_CONFIG_DIR"] == str(tmp_path / "data")
     assert os.environ["MPLCONFIGDIR"] == str(tmp_path / "data" / "matplotlib")
 
@@ -342,6 +492,94 @@ def test_worker_resolves_auto_device_to_cpu_and_numeric_batch(tmp_path: Path):
     call = FakeYOLO.instances[0].train_calls[0]
     assert call["device"] == "cpu"
     assert call["batch"] == 4
+
+
+def test_worker_uses_fit_epoch_callback_for_current_validation_metrics(tmp_path: Path):
+    """Catches progress being written before the epoch's validation metrics exist."""
+    manifest_path, payload = write_manifest(tmp_path)
+
+    assert main(
+        ["--manifest", str(manifest_path)],
+        yolo_cls=FakeYOLO,
+        cuda_available=lambda: False,
+        project_root=tmp_path,
+    ) == 0
+
+    assert set(FakeYOLO.instances[0].callbacks) == {"on_fit_epoch_end"}
+    progress = json.loads(
+        (Path(str(payload["run_dir"])) / "progress.json").read_text(encoding="utf-8")
+    )
+    assert progress["current_epoch"] == 4
+    assert progress["metrics"] == {"map50": 0.25}
+
+
+def test_worker_uses_fixed_test_directory_when_metrics_has_no_save_dir(tmp_path: Path):
+    """Catches reliance on a save_dir attribute absent from Ultralytics DetMetrics."""
+    manifest_path, payload = write_manifest(tmp_path)
+    FakeYOLO.fail_stage = "no_metrics_save_dir"
+
+    assert main(
+        ["--manifest", str(manifest_path)],
+        yolo_cls=FakeYOLO,
+        cuda_available=lambda: False,
+        project_root=tmp_path,
+    ) == 0
+    assert (
+        Path(str(payload["run_dir"])) / "confusion_matrix.png"
+    ).read_bytes() == b"confusion matrix"
+
+
+@pytest.mark.parametrize("stage", ["callback", "runtime", "device"])
+def test_worker_converts_setup_failures_to_atomic_safe_results(
+    tmp_path: Path, monkeypatch, stage: str
+):
+    """Catches setup/import/runtime failures escaping without terminal result.json."""
+    manifest_path, payload = write_manifest(tmp_path)
+    if stage == "callback":
+        FakeYOLO.fail_stage = "callback"
+        cuda_available = lambda: False
+    elif stage == "runtime":
+        monkeypatch.setattr(
+            "training.worker.configure_runtime",
+            lambda _root: (_ for _ in ()).throw(OSError(1455, "D:\\private\\dll")),
+        )
+        cuda_available = lambda: False
+    else:
+        cuda_available = lambda: (_ for _ in ()).throw(
+            OSError(1455, "D:\\private\\cuda.dll")
+        )
+
+    assert main(
+        ["--manifest", str(manifest_path)],
+        yolo_cls=FakeYOLO,
+        cuda_available=cuda_available,
+        project_root=tmp_path,
+    ) == 1
+    text = (Path(str(payload["run_dir"])) / "result.json").read_text(encoding="utf-8")
+    result = json.loads(text)
+    assert result["error_code"] == "training_failed"
+    assert str(tmp_path) not in text
+    assert "private" not in text.casefold()
+
+
+@pytest.mark.parametrize("stage", ["confusion_missing", "confusion_outside"])
+def test_worker_fails_closed_for_missing_or_escaped_confusion_matrix(
+    tmp_path: Path, stage: str
+):
+    """Catches completed jobs without their fixed held-out evaluation artifact."""
+    manifest_path, payload = write_manifest(tmp_path)
+    FakeYOLO.fail_stage = stage
+
+    assert main(
+        ["--manifest", str(manifest_path)],
+        yolo_cls=FakeYOLO,
+        cuda_available=lambda: False,
+        project_root=tmp_path,
+    ) == 1
+    run_dir = Path(str(payload["run_dir"]))
+    result = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
+    assert result["error_code"] == "evaluation_failed"
+    assert not (run_dir / "confusion_matrix.png").exists()
 
 
 @pytest.mark.parametrize(

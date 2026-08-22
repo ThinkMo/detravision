@@ -13,12 +13,51 @@ from typing import Any
 
 _MODEL_ID = re.compile(r"yolo(?:11|26)[nsmlx]\.pt\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_MANIFEST_KEYS = frozenset(
+    {
+        "base_model",
+        "dataset_yaml",
+        "run_dir",
+        "model_cache_dir",
+        "epochs",
+        "imgsz",
+        "batch",
+        "device",
+        "patience",
+    }
+)
+_PROGRESS_KEYS = frozenset({"current_epoch", "total_epochs", "metrics"})
+_RESULT_KEYS = frozenset(
+    {
+        "status",
+        "metrics",
+        "accepted",
+        "best_sha256",
+        "error_code",
+        "error_message",
+    }
+)
+_METRIC_KEYS = frozenset({"precision", "recall", "map50", "map50_95", "classes"})
+_CLASS_METRIC_KEYS = frozenset({"precision", "recall", "map50", "map50_95"})
+
+ERROR_MESSAGES = {
+    "cuda_oom": "GPU memory is insufficient for this training configuration.",
+    "dataset_invalid": "The configured training dataset is unavailable or invalid.",
+    "weights_unavailable": "The selected base-model weights are unavailable.",
+    "evaluation_failed": "Held-out test evaluation failed.",
+    "training_failed": "Training did not produce a valid model.",
+}
 
 
 def _mapping(payload: object, label: str) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError(f"{label} must be a JSON object")
     return payload
+
+
+def _exact_keys(payload: Mapping[str, Any], expected: frozenset[str], label: str) -> None:
+    if set(payload) != expected:
+        raise ValueError(f"{label} has unsupported or missing fields")
 
 
 def _string(payload: Mapping[str, Any], field: str) -> str:
@@ -43,7 +82,7 @@ def _absolute_path(payload: Mapping[str, Any], field: str) -> str:
 
 
 def _finite_float(value: object, field: str) -> float:
-    if isinstance(value, bool):
+    if isinstance(value, (bool, str, bytes)):
         raise ValueError(f"{field} must be numeric")
     try:
         result = float(value)
@@ -52,6 +91,12 @@ def _finite_float(value: object, field: str) -> float:
     if not math.isfinite(result):
         raise ValueError(f"{field} must be finite")
     return result
+
+
+def _json_float(value: object, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field} must be a JSON number")
+    return _finite_float(value, field)
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +114,7 @@ class TrainingManifest:
     @classmethod
     def from_json(cls, payload: object) -> "TrainingManifest":
         values = _mapping(payload, "training manifest")
+        _exact_keys(values, _MANIFEST_KEYS, "training manifest")
         base_model = _string(values, "base_model")
         if _MODEL_ID.fullmatch(base_model) is None:
             raise ValueError("unsupported base model")
@@ -112,13 +158,14 @@ class TrainingProgress:
     @classmethod
     def from_json(cls, payload: object) -> "TrainingProgress":
         values = _mapping(payload, "training progress")
+        _exact_keys(values, _PROGRESS_KEYS, "training progress")
         current_epoch = _integer(values, "current_epoch")
         total_epochs = _integer(values, "total_epochs")
         if current_epoch < 0 or total_epochs < 1 or current_epoch > total_epochs:
             raise ValueError("invalid training progress")
         raw_metrics = _mapping(values.get("metrics"), "progress metrics")
         metrics = {
-            str(name): _finite_float(value, f"metrics.{name}")
+            str(name): _json_float(value, f"metrics.{name}")
             for name, value in raw_metrics.items()
         }
         return cls(current_epoch, total_epochs, metrics)
@@ -139,6 +186,7 @@ class TrainingResult:
     @classmethod
     def from_json(cls, payload: object) -> "TrainingResult":
         values = _mapping(payload, "training result")
+        _exact_keys(values, _RESULT_KEYS, "training result")
         status = _string(values, "status")
         if status not in {"completed", "failed"}:
             raise ValueError("unsupported training result status")
@@ -146,9 +194,7 @@ class TrainingResult:
         if type(accepted) is not bool:
             raise ValueError("accepted must be boolean")
         raw_metrics = values.get("metrics")
-        if raw_metrics is not None and not isinstance(raw_metrics, Mapping):
-            raise ValueError("metrics must be an object or null")
-        metrics = dict(raw_metrics) if raw_metrics is not None else None
+        metrics = _validated_metrics(raw_metrics) if raw_metrics is not None else None
         best_sha256 = values.get("best_sha256")
         if best_sha256 is not None and (
             not isinstance(best_sha256, str)
@@ -176,6 +222,16 @@ class TrainingResult:
             or not error_message
         ):
             raise ValueError("invalid failed result")
+        if status == "completed" and accepted is not meets_acceptance(metrics):
+            raise ValueError("acceptance does not match metrics")
+        if status == "failed" and (
+            error_code not in ERROR_MESSAGES
+            or error_message != ERROR_MESSAGES.get(error_code)
+            or len(error_message) > 256
+            or "\n" in error_message
+            or "\r" in error_message
+        ):
+            raise ValueError("unsafe training error")
         return cls(
             status=status,
             metrics=metrics,
@@ -187,6 +243,41 @@ class TrainingResult:
 
     def to_json(self) -> dict[str, object]:
         return asdict(self)
+
+
+def _optional_metric(value: object, field: str) -> float | None:
+    if value is None:
+        return None
+    return _json_float(value, field)
+
+
+def _validated_metrics(payload: object) -> dict[str, Any]:
+    values = _mapping(payload, "metrics")
+    _exact_keys(values, _METRIC_KEYS, "metrics")
+    raw_classes = _mapping(values["classes"], "metric classes")
+    classes: dict[str, dict[str, float | None]] = {}
+    for name, raw_class_metrics in raw_classes.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError("metric class names must be non-empty strings")
+        class_metrics = _mapping(raw_class_metrics, f"class metrics for {name}")
+        _exact_keys(class_metrics, _CLASS_METRIC_KEYS, f"class metrics for {name}")
+        classes[name] = {
+            "precision": _optional_metric(
+                class_metrics["precision"], f"{name}.precision"
+            ),
+            "recall": _optional_metric(class_metrics["recall"], f"{name}.recall"),
+            "map50": _json_float(class_metrics["map50"], f"{name}.map50"),
+            "map50_95": _json_float(
+                class_metrics["map50_95"], f"{name}.map50_95"
+            ),
+        }
+    return {
+        "precision": _json_float(values["precision"], "precision"),
+        "recall": _json_float(values["recall"], "recall"),
+        "map50": _json_float(values["map50"], "map50"),
+        "map50_95": _json_float(values["map50_95"], "map50_95"),
+        "classes": classes,
+    }
 
 
 def atomic_write_json(path: Path | str, payload: Mapping[str, object]) -> None:

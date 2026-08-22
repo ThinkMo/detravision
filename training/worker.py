@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from training.contracts import (
+    ERROR_MESSAGES,
     TrainingManifest,
     TrainingProgress,
     TrainingResult,
@@ -19,15 +20,6 @@ from training.contracts import (
     meets_acceptance,
 )
 from training.train import PROJECT_ROOT, configure_runtime, resolve_device
-
-
-ERROR_MESSAGES = {
-    "cuda_oom": "GPU memory is insufficient for this training configuration.",
-    "dataset_invalid": "The configured training dataset is unavailable or invalid.",
-    "weights_unavailable": "The selected base-model weights are unavailable.",
-    "evaluation_failed": "Held-out test evaluation failed.",
-    "training_failed": "Training did not produce a valid model.",
-}
 
 
 @contextmanager
@@ -97,6 +89,22 @@ def _copy_canonical_weights(run_dir: Path) -> Path:
     return destination_best
 
 
+def _copy_confusion_matrix(raw_metrics: object, run_dir: Path) -> None:
+    expected_save_dir = _contained(run_dir / "test", run_dir)
+    raw_save_dir = getattr(raw_metrics, "save_dir", None)
+    if raw_save_dir is not None:
+        save_dir = _contained(Path(raw_save_dir), run_dir)
+        if save_dir != expected_save_dir:
+            raise ValueError("evaluation output directory is not fixed")
+    else:
+        save_dir = expected_save_dir
+    source = _contained(save_dir / "confusion_matrix.png", save_dir)
+    if not source.is_file():
+        raise FileNotFoundError("confusion matrix unavailable")
+    destination = _contained(run_dir / "confusion_matrix.png", run_dir)
+    shutil.copy2(source, destination)
+
+
 def _base_model_reference(
     manifest: TrainingManifest, project_root: Path, model_cache_dir: Path
 ) -> str:
@@ -133,21 +141,18 @@ def _is_dataset_error(exc: BaseException) -> bool:
     )
 
 
-def run_manifest(
+def _execute_manifest(
     manifest: TrainingManifest,
     *,
     yolo_cls=None,
     cuda_available: Callable[[], bool] | None = None,
     project_root: Path = PROJECT_ROOT,
-) -> int:
+) -> TrainingResult:
     run_dir = Path(manifest.run_dir).resolve()
     model_cache_dir = Path(manifest.model_cache_dir).resolve()
     dataset_yaml = Path(manifest.dataset_yaml).resolve()
-    if not run_dir.is_dir():
-        return 1
     if not dataset_yaml.is_file():
-        _write_failure(run_dir, "dataset_invalid")
-        return 1
+        raise WorkerFailure("dataset_invalid")
     model_cache_dir.mkdir(parents=True, exist_ok=True)
     configure_runtime(project_root)
 
@@ -167,8 +172,7 @@ def run_manifest(
                 _base_model_reference(manifest, project_root.resolve(), model_cache_dir)
             )
         except Exception:
-            _write_failure(run_dir, "weights_unavailable")
-            return 1
+            raise WorkerFailure("weights_unavailable")
 
         def on_train_epoch_end(trainer) -> None:
             progress = TrainingProgress(
@@ -178,7 +182,7 @@ def run_manifest(
             )
             atomic_write_json(run_dir / "progress.json", progress.to_json())
 
-        model.add_callback("on_train_epoch_end", on_train_epoch_end)
+        model.add_callback("on_fit_epoch_end", on_train_epoch_end)
         try:
             model.train(
                 data=manifest.dataset_yaml,
@@ -200,8 +204,7 @@ def run_manifest(
                 code = "dataset_invalid"
             else:
                 code = "training_failed"
-            _write_failure(run_dir, code)
-            return 1
+            raise WorkerFailure(code) from exc
 
         try:
             evaluation_model = yolo_cls(str(best_path))
@@ -212,12 +215,16 @@ def run_manifest(
                 batch=batch,
                 device=device,
                 workers=0,
+                project=manifest.run_dir,
+                name="test",
+                exist_ok=True,
+                plots=True,
             )
             metrics = extract_metrics(raw_metrics)
+            _copy_confusion_matrix(raw_metrics, run_dir)
         except Exception as exc:
             code = "cuda_oom" if _is_cuda_oom(exc) else "evaluation_failed"
-            _write_failure(run_dir, code)
-            return 1
+            raise WorkerFailure(code) from exc
 
         result = TrainingResult(
             status="completed",
@@ -227,8 +234,46 @@ def run_manifest(
             error_code=None,
             error_message=None,
         )
+        return result
+
+
+class WorkerFailure(Exception):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def run_manifest(
+    manifest: TrainingManifest,
+    *,
+    yolo_cls=None,
+    cuda_available: Callable[[], bool] | None = None,
+    project_root: Path = PROJECT_ROOT,
+) -> int:
+    try:
+        run_dir = Path(manifest.run_dir).resolve()
+        if not run_dir.is_dir():
+            return 1
+    except (OSError, RuntimeError, ValueError):
+        return 1
+    try:
+        result = _execute_manifest(
+            manifest,
+            yolo_cls=yolo_cls,
+            cuda_available=cuda_available,
+            project_root=project_root,
+        )
         atomic_write_json(run_dir / "result.json", result.to_json())
         return 0
+    except WorkerFailure as exc:
+        code = exc.code
+    except Exception:
+        code = "training_failed"
+    try:
+        _write_failure(run_dir, code)
+    except Exception:
+        pass
+    return 1
 
 
 def build_parser() -> argparse.ArgumentParser:
