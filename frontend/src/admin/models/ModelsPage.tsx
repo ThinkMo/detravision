@@ -8,6 +8,7 @@ import { LoadingPanel } from "../../components/LoadingPanel";
 import { AdminHeading, AdminNotice, ConfirmDialog, errorMessage } from "../shared";
 import { TrainingJobDialog } from "./TrainingJobDialog";
 import { TrainingJobsPanel } from "./TrainingJobsPanel";
+import { TrainingDatasetsPanel } from "./TrainingDatasetsPanel";
 import { trainingApi } from "./trainingApi";
 
 type ModelForm = { name: string; path: string; runtime: ModelVersion["runtime"]; classes: string; map50: string };
@@ -35,12 +36,13 @@ export function ModelsPage() {
   const client = useQueryClient();
   const [tab, setTab] = useState<"models" | "training">("models");
   const [showTraining, setShowTraining] = useState(false);
+  const [showDatasets, setShowDatasets] = useState(false);
   const [message, setMessage] = useState("");
   const catalog = useQuery({ queryKey: ["admin", "training", "catalog"], queryFn: trainingApi.catalog, enabled: tab === "training" });
   const createTraining = useMutation({ mutationFn: (value: TrainingJobCreate) => trainingApi.create(value), onSuccess: () => { setShowTraining(false); setMessage("训练任务已加入队列"); void client.invalidateQueries({ queryKey: ["admin", "training-jobs"] }); } });
   return <section className="admin-page">
-    <AdminHeading eyebrow="MODEL & TRAINING" title="模型管理" description="训练、评估、注册并安全切换后端识别模型" action={tab === "training" ? <button type="button" disabled={!catalog.data?.dataset.available} onClick={() => { createTraining.reset(); setShowTraining(true); }}>新建训练</button> : undefined} />
+    <AdminHeading eyebrow="MODEL & TRAINING" title="模型管理" description="训练、评估、注册并安全切换后端识别模型" action={tab === "training" ? <div className="training-heading-actions"><button type="button" className="secondary-button" onClick={() => setShowDatasets((value) => !value)}>管理训练集</button><button type="button" disabled={!catalog.data?.datasets.some((dataset) => dataset.available) || !catalog.data?.models.some((model) => model.available)} onClick={() => { createTraining.reset(); setShowTraining(true); }}>新建训练</button></div> : undefined} />
     <div className="admin-tabs" role="tablist" aria-label="模型管理视图"><button type="button" role="tab" aria-selected={tab === "models"} className={tab === "models" ? "admin-tabs__active" : ""} onClick={() => setTab("models")}>模型版本</button><button type="button" role="tab" aria-selected={tab === "training"} className={tab === "training" ? "admin-tabs__active" : ""} onClick={() => setTab("training")}>训练任务</button></div>
-    {tab === "models" ? <ModelVersions message={message} setMessage={setMessage} /> : catalog.isLoading ? <LoadingPanel label="正在加载训练配置" /> : catalog.isError || !catalog.data ? <ErrorPanel message="无法读取训练配置" onRetry={() => void catalog.refetch()} /> : <><AdminNotice message={message || (!catalog.data.dataset.available ? "训练数据集不可用，请检查服务器配置" : "")} error={!catalog.data.dataset.available} /><TrainingJobsPanel onRegistered={() => void client.invalidateQueries({ queryKey: ["admin", "models"] })} />{showTraining ? <TrainingJobDialog catalog={catalog.data} pending={createTraining.isPending} error={createTraining.isError ? errorMessage(createTraining.error, "创建训练任务失败") : ""} onClose={() => setShowTraining(false)} onSubmit={(value) => createTraining.mutate(value)} /> : null}</>}
+    {tab === "models" ? <ModelVersions message={message} setMessage={setMessage} /> : catalog.isLoading ? <LoadingPanel label="正在加载训练配置" /> : catalog.isError || !catalog.data ? <ErrorPanel message="无法读取训练配置" onRetry={() => void catalog.refetch()} /> : <>{showDatasets ? <TrainingDatasetsPanel /> : null}<AdminNotice message={message || (!catalog.data.datasets.some((dataset) => dataset.available) ? "请先定义一个可用的服务器训练集" : !catalog.data.models.some((model) => model.available) ? "请先准备基础模型权重" : "")} error={!catalog.data.datasets.some((dataset) => dataset.available) || !catalog.data.models.some((model) => model.available)} /><TrainingJobsPanel onRegistered={() => void client.invalidateQueries({ queryKey: ["admin", "models"] })} />{showTraining ? <TrainingJobDialog catalog={catalog.data} pending={createTraining.isPending} error={createTraining.isError ? errorMessage(createTraining.error, "创建训练任务失败") : ""} onClose={() => setShowTraining(false)} onSubmit={(value) => createTraining.mutate(value)} /> : null}</>}
   </section>;
 }

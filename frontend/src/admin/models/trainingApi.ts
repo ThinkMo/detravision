@@ -1,5 +1,5 @@
 import { api } from "../../api/client";
-import type { ModelVersion, TrainingCatalog, TrainingJob, TrainingJobCreate, TrainingJobDetail, TrainingJobPage } from "../../api/types";
+import type { ModelVersion, TrainingCatalog, TrainingDataset, TrainingDatasetInput, TrainingJob, TrainingJobCreate, TrainingJobDetail, TrainingJobPage } from "../../api/types";
 
 function idempotencyKey() {
   return globalThis.crypto.randomUUID();
@@ -27,6 +27,12 @@ export const trainingApi = {
   list: () => api.request<TrainingJobPage>("/api/training-jobs"),
   detail: (id: number) => api.request<TrainingJobDetail>(`/api/training-jobs/${id}`),
   log: (url: string) => api.requestText(url),
+  datasetRoots: () => api.request<{ items: Array<{ alias: string }> }>("/api/training/dataset-roots"),
+  datasetDirectories: (rootAlias: string, path: string) => api.request<{ items: Array<{ name: string; path: string }> }>(`/api/training/dataset-directories?root_alias=${encodeURIComponent(rootAlias)}&path=${encodeURIComponent(path)}`),
+  datasets: () => api.request<{ items: TrainingDataset[] }>("/api/training/datasets"),
+  createDataset: (value: TrainingDatasetInput) => api.request<TrainingDataset>("/api/training/datasets", { method: "POST", body: JSON.stringify(value) }),
+  updateDataset: (id: number, value: Partial<TrainingDatasetInput> & { enabled?: boolean }) => api.request<TrainingDataset>(`/api/training/datasets/${id}`, { method: "PATCH", body: JSON.stringify(value) }),
+  disableDataset: (id: number) => api.request<void>(`/api/training/datasets/${id}`, { method: "DELETE" }),
   create: (value: TrainingJobCreate, key = idempotencyKey()) => api.request<TrainingJob>("/api/training-jobs", {
     method: "POST",
     headers: { "Idempotency-Key": key },

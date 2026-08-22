@@ -9,9 +9,11 @@ import { trainingErrorMessage } from "./trainingApi";
 const json = (value: unknown, status = 200) => Response.json(value, { status });
 
 const catalog = {
-  models: ["11", "26"].flatMap((series) => ["n", "s", "m", "l", "x"].map((size) => ({ id: `yolo${series}${size}.pt`, series, size }))),
+  models: ["11", "26"].flatMap((series) => ["n", "s", "m", "l", "x"].map((size) => ({ id: `yolo${series}${size}.pt`, series, size, available: series === "11" && ["n", "m"].includes(size) }))),
   executors: [{ id: "local", enabled: true }, { id: "remote", enabled: false }],
   dataset: { id: "configured", available: true, has_test_split: true, classes: ["helmet", "no_helmet"] },
+  datasets: [{ id: 3, key: "dataset:3", name: "工地安全帽", root_alias: "primary", directory: "site-a", train_split: "images/train", val_split: "images/val", test_split: "images/test", classes: ["person", "helmet", "no_helmet"], enabled: true, available: true, reason: null }],
+  default_dataset_key: "dataset:3",
 };
 
 function renderPage() {
@@ -51,7 +53,7 @@ describe("model training console", () => {
     await userEvent.click(await screen.findByRole("button", { name: "新建训练" }));
 
     const dialog = screen.getByRole("dialog", { name: "新建本地训练" });
-    for (const model of catalog.models) expect(within(dialog).getByRole("option", { name: model.id })).toBeInTheDocument();
+    for (const model of catalog.models) expect(within(dialog).getByRole("option", { name: new RegExp(model.id.replace(".", "\\.")) })).toBeInTheDocument();
     expect(within(dialog).getByRole("option", { name: /远程/ })).toBeDisabled();
     expect(within(dialog).getByLabelText("基础模型")).toHaveValue("yolo11m.pt");
     expect(within(dialog).getByLabelText("输入尺寸")).toHaveValue("640");
@@ -118,6 +120,34 @@ describe("model training console", () => {
   it("polls active job responses and stops polling terminal responses", () => {
     expect(trainingPollingInterval({ state: { data: { items: [{ status: "running" }] } } })).toBe(2000);
     expect(trainingPollingInterval({ state: { data: { items: [{ status: "completed" }, { status: "failed" }] } } })).toBe(false);
+  });
+
+  it("defines a training dataset from server-provided directories", async () => {
+    let created: Record<string, unknown> | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/models") return json([]);
+      if (path === "/api/training/catalog") return json(catalog);
+      if (path === "/api/training-jobs") return json({ items: [], total: 0, page: 1, page_size: 20 });
+      if (path === "/api/training/datasets" && init?.method === "POST") { created = JSON.parse(String(init.body)); return json(catalog.datasets[0], 201); }
+      if (path === "/api/training/datasets") return json({ items: catalog.datasets });
+      if (path === "/api/training/dataset-roots") return json({ items: [{ alias: "primary" }] });
+      if (path.includes("/api/training/dataset-directories")) return json({ items: [{ name: "site-a", path: "site-a" }] });
+      throw new Error(`Unexpected request ${path}`);
+    }));
+
+    renderPage();
+    await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
+    await userEvent.click(await screen.findByRole("button", { name: "管理训练集" }));
+    await userEvent.click(await screen.findByRole("button", { name: "定义训练集" }));
+    const dialog = await screen.findByRole("dialog", { name: "定义服务器训练集" });
+    await userEvent.type(within(dialog).getByLabelText("训练集名称"), "现场 A");
+    await userEvent.selectOptions(within(dialog).getByLabelText("服务器目录"), "site-a");
+    await userEvent.click(within(dialog).getByRole("button", { name: "进入目录" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "选择当前目录" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "保存训练集" }));
+    await waitFor(() => expect(created).toMatchObject({ root_alias: "primary", directory: "site-a" }));
+    expect(JSON.stringify(created)).not.toContain("D:\\");
   });
 
   it("announces resume and registration failures from the training section", async () => {

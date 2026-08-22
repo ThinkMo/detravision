@@ -100,9 +100,36 @@ export interface TrainingMetrics extends TrainingMetricSet {
 }
 
 export interface TrainingCatalog {
-  models: Array<{ id: string; series: string; size: string }>;
+  models: Array<{ id: string; series: string; size: string; available: boolean }>;
   executors: Array<{ id: "local" | "remote"; enabled: boolean }>;
   dataset: { id: string; available: boolean; has_test_split: boolean; classes: string[] };
+  datasets: TrainingDataset[];
+  default_dataset_key: string | null;
+}
+
+export interface TrainingDataset {
+  id: number;
+  key: string;
+  name: string;
+  root_alias: string;
+  directory: string;
+  train_split: string;
+  val_split: string;
+  test_split: string;
+  classes: string[];
+  enabled: boolean;
+  available: boolean;
+  reason: string | null;
+}
+
+export interface TrainingDatasetInput {
+  name: string;
+  root_alias: string;
+  directory: string;
+  train_split: string;
+  val_split: string;
+  test_split: string;
+  classes: string[];
 }
 
 export interface TrainingJob {
@@ -157,6 +184,7 @@ export interface TrainingJobPage {
 }
 
 export interface TrainingJobCreate {
+  dataset_key: string;
   executor: "local";
   base_model: string;
   imgsz: 640 | 960;

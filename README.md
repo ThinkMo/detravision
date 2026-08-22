@@ -240,6 +240,18 @@ $env:REAL_MODEL_TEST_IMAGE_DIR = (Resolve-Path "datasets/construction-ppe/images
 
 ## 数据与训练
 
+### 在管理页面选择服务器训练集
+
+本地训练只允许使用管理员在 `TRAINING_DATASET_ROOTS` 中明确授权的服务器目录。例如：
+
+```env
+TRAINING_DATASET_ROOTS=construction=D:\datasets\construction;customer=D:\datasets\customer
+```
+
+每个根目录必须是已存在的绝对目录，多个目录用分号分隔，且不能相互嵌套。重启服务后，在“模型管理 → 训练任务 → 管理训练集”中逐级浏览服务器目录，定义数据集名称、训练/验证/测试图片相对目录和类别。页面与 API 只返回别名和相对路径，不会暴露服务器绝对路径。
+
+每个分片必须同时存在对应标签目录，例如 `images/train` 对应 `labels/train`。新建训练时必须选择一个可用训练集；系统会把配置快照写入任务自己的 `dataset.yaml`，之后数据集被停用也不会改变已有任务的配置。基础模型下拉框只允许选择项目根目录或 `TRAINING_MODEL_CACHE_DIR` 中实际存在的 `.pt` 权重。
+
 从原始 Construction-PPE ZIP 构建三类训练集、执行冒烟训练、正式训练、续训和验证的完整步骤见 [训练集构建与模型训练指南](docs/training-guide.md)。
 
 类别定义：

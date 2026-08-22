@@ -50,6 +50,11 @@
 .admin-filters { display: grid; grid-template-columns: repeat(5, minmax(8rem, 1fr)) auto; align-items: end; gap: .7rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: #fff; }
 .admin-pagination { display: flex; align-items: center; justify-content: flex-end; gap: .75rem; }
 .training-jobs, .training-job-list { display: grid; gap: 1rem; }
+.training-datasets { display: grid; gap: 1rem; }
+.training-heading-actions, .training-directory-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.training-heading-actions .secondary-button { color: var(--color-safe); border: 1px solid var(--color-border); background: #fff; }
+.training-dataset-dialog { width: min(94vw, 42rem); max-height: 92vh; overflow: auto; }
+.training-directory-path { word-break: break-all; }
 .training-job-list { grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); }
 .training-job-card { display: grid; gap: .85rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: #fff; box-shadow: var(--shadow-sm); }
 .training-job-card > header, .training-job-card > header > div { display: flex; align-items: center; justify-content: space-between; gap: .65rem; }
