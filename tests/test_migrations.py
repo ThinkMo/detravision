@@ -14,7 +14,7 @@ from sqlalchemy.engine import make_url
 
 from backend.db import migrate
 from backend.db.migrate import alembic_config, run_migrations
-from backend.db.models import BatchImage, Camera, DetectionEvent, ModelVersion, UserSession
+from backend.db.models import BatchImage, Camera, DetectionEvent, ModelVersion, TrainingJob, UserSession
 from backend.db.session import create_engine_from_url, create_session_factory
 
 
@@ -136,12 +136,65 @@ def test_batch_result_and_status_fields_remain_text_in_metadata():
     assert isinstance(BatchImage.__table__.c.detections_json.type, Text)
 
 
+def test_training_migration_adds_queue_indexes_and_model_provenance(tmp_path):
+    """Catches missing queue indexes or provenance needed to activate trained models."""
+    url = "sqlite:///" + (tmp_path / "training-schema.db").as_posix()
+    run_migrations(url)
+    inspector = inspect(create_engine(url))
+
+    assert "training_job" in inspector.get_table_names()
+    indexes = {
+        tuple(index["column_names"])
+        for index in inspector.get_indexes("training_job")
+    }
+    assert {("status",), ("created_at",)} <= indexes
+    foreign_keys = {
+        (tuple(foreign_key["constrained_columns"]), foreign_key["referred_table"])
+        for foreign_key in inspector.get_foreign_keys("training_job")
+    }
+    assert {(('created_by',), 'user'), (('resume_from_id',), 'training_job')} <= foreign_keys
+    model_columns = {
+        column["name"]: column for column in inspector.get_columns("model_version")
+    }
+    assert {
+        "training_job_id",
+        "source",
+        "base_model",
+        "imgsz",
+        "metrics_json",
+        "deployment_runtime",
+    } <= model_columns.keys()
+    assert model_columns["training_job_id"]["nullable"] is True
+
+
+def test_training_job_uses_portable_text_status_and_metrics():
+    """Catches dialect-specific enum or JSON types that break SQLite/MySQL parity."""
+    assert isinstance(TrainingJob.__table__.c.status.type, Text)
+    assert isinstance(TrainingJob.__table__.c.metrics_json.type, Text)
+    assert isinstance(ModelVersion.__table__.c.metrics_json.type, Text)
+    assert ModelVersion.__table__.c.training_job_id.nullable is True
+
+
+def test_mysql_training_migration_emits_portable_text_defaults():
+    """Catches MySQL-incompatible defaults in the training migration."""
+    output = StringIO()
+    config = alembic_config("mysql+pymysql://safety:safety@127.0.0.1/safety_test?charset=utf8mb4")
+    config.output_buffer = output
+
+    command.upgrade(config, "0005", sql=True)
+
+    sql = output.getvalue()
+    assert "CREATE TABLE training_job" in sql
+    assert "status TEXT NOT NULL DEFAULT ('queued')" in sql
+    assert "metrics_json TEXT" in sql
+
+
 def test_legacy_sqlite_is_stamped_then_upgraded(legacy_database_url):
     """Catches treating an existing MVP database as a fresh empty database."""
     run_migrations(legacy_database_url)
 
     with create_engine(legacy_database_url).connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0004"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0005"
         event_columns = {column["name"] for column in inspect(connection).get_columns("detection_event")}
     assert {"ack_by", "ack_user_id"} <= event_columns
 

@@ -79,6 +79,14 @@ class ModelVersion(Base):
     runtime: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("('onnx-fp32')"))
     classes: Mapped[str] = mapped_column(Text, nullable=False)
     map50: Mapped[float | None] = mapped_column(Float)
+    training_job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("training_job.id", ondelete="SET NULL")
+    )
+    source: Mapped[str | None] = mapped_column(String(20))
+    base_model: Mapped[str | None] = mapped_column(String(30))
+    imgsz: Mapped[int | None] = mapped_column(Integer)
+    metrics_json: Mapped[str | None] = mapped_column(Text)
+    deployment_runtime: Mapped[str | None] = mapped_column(String(50))
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP"))
 
@@ -105,6 +113,69 @@ class UserSession(Base):
     token_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     expires_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP"))
+
+
+class TrainingJob(Base):
+    __tablename__ = "training_job"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','evaluating','stopping','stopped','completed','failed','interrupted','cancelled')",
+            name="status",
+        ),
+        Index("ix_training_job_status", "status"),
+        Index("ix_training_job_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_by: Mapped[int] = mapped_column(
+        ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
+    )
+    executor: Mapped[str] = mapped_column(String(20), nullable=False)
+    base_model: Mapped[str] = mapped_column(String(30), nullable=False)
+    dataset_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    epochs: Mapped[int] = mapped_column(Integer, nullable=False)
+    imgsz: Mapped[int] = mapped_column(Integer, nullable=False)
+    batch: Mapped[str] = mapped_column(String(20), nullable=False)
+    device: Mapped[str] = mapped_column(String(20), nullable=False)
+    patience: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("('queued')")
+    )
+    current_epoch: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    total_epochs: Mapped[int] = mapped_column(Integer, nullable=False)
+    pid: Mapped[int | None] = mapped_column(Integer)
+    started_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    stop_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("0")
+    )
+    run_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    has_best: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
+    has_last: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
+    has_metrics: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("0"))
+    precision: Mapped[float | None] = mapped_column(Float)
+    recall: Mapped[float | None] = mapped_column(Float)
+    map50: Mapped[float | None] = mapped_column(Float)
+    map50_95: Mapped[float | None] = mapped_column(Float)
+    no_helmet_precision: Mapped[float | None] = mapped_column(Float)
+    no_helmet_recall: Mapped[float | None] = mapped_column(Float)
+    accepted: Mapped[bool | None] = mapped_column(Boolean)
+    metrics_json: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    best_sha256: Mapped[str | None] = mapped_column(String(64))
+    resume_from_id: Mapped[int | None] = mapped_column(
+        ForeignKey("training_job.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
 
 
 class SiteSettings(Base):
