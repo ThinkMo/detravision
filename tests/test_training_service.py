@@ -13,6 +13,8 @@ from backend.db.models import ModelVersion, TrainingJob, User
 from backend.db.repositories import Repository
 from backend.db.session import create_engine_from_url, create_session_factory
 from backend.training.catalog import TrainingRequest
+from backend.training.dataset_repository import TrainingDatasetRepository
+from backend.training.dataset_service import DatasetService
 from backend.training.repository import TrainingRepository
 from backend.training.service import TrainingService, TrainingServiceError
 from backend.training.storage import TrainingStorage
@@ -43,24 +45,46 @@ def service_context(tmp_path: Path):
         session.add(admin)
         session.flush()
         admin_id = admin.id
-    dataset = tmp_path / "private" / "helmet.yaml"
-    dataset.parent.mkdir()
+    dataset_root = tmp_path / "datasets"
+    dataset_dir = dataset_root / "site-a"
+    for kind in ("images", "labels"):
+        for split in ("train", "val", "test"):
+            (dataset_dir / kind / split).mkdir(parents=True, exist_ok=True)
+    dataset = dataset_dir / "data.yaml"
     dataset.write_text(
-        "train: train\nval: val\ntest: test\nnames: [person, helmet, no_helmet]\n",
+        "path: .\ntrain: images/train\nval: images/val\ntest: images/test\n"
+        "names: [person, helmet, no_helmet]\n",
         encoding="utf-8",
     )
     settings = Settings(
         database_url=database_url,
         training_dataset_yaml=dataset,
+        training_dataset_roots_raw=f"primary={dataset_root}",
         training_run_dir=tmp_path / "runs",
         training_model_cache_dir=tmp_path / "models",
     )
     repository = TrainingRepository(session_factory)
+    dataset_repository = TrainingDatasetRepository(session_factory)
+    dataset_service = DatasetService(settings, dataset_repository)
+    dataset_service.create(
+        {
+            "name": "Site A",
+            "root_alias": "primary",
+            "directory": "site-a",
+            "train_split": "images/train",
+            "val_split": "images/val",
+            "test_split": "images/test",
+            "classes": ["person", "helmet", "no_helmet"],
+        },
+        created_by=admin_id,
+    )
     model_repository = Repository(session_factory)
     storage = TrainingStorage(settings)
+    storage.model_cache_root.mkdir(parents=True)
+    (storage.model_cache_root / "yolo11m.pt").write_bytes(b"local-weights")
     manager = ManagerSpy()
     service = TrainingService(
-        repository, storage, model_repository, manager, settings
+        repository, storage, model_repository, manager, settings, dataset_service
     )
     try:
         yield (
@@ -78,6 +102,7 @@ def service_context(tmp_path: Path):
 
 def request(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
+        "dataset_key": "dataset:1",
         "executor": "local",
         "base_model": "yolo11m.pt",
         "imgsz": 640,
@@ -101,7 +126,8 @@ def test_create_writes_complete_manifest_before_queue_commit_and_is_idempotent(
     def asserting_create(values):
         nonlocal observed_manifest
         manifest = storage.run_path(values["run_key"]) / "manifest.json"
-        observed_manifest = json.loads(manifest.read_text(encoding="utf-8"))
+        if not observed_manifest:
+            observed_manifest = json.loads(manifest.read_text(encoding="utf-8"))
         return original_create(values)
 
     repository.create_job = asserting_create
@@ -118,7 +144,9 @@ def test_create_writes_complete_manifest_before_queue_commit_and_is_idempotent(
 
     assert second["id"] == first["id"]
     assert observed_manifest["base_model"] == "yolo11m.pt"
-    assert observed_manifest["dataset_yaml"] == str(storage.dataset_yaml)
+    assert observed_manifest["dataset_yaml"] == str(
+        storage.run_path(first["run_key"]) / "dataset.yaml"
+    )
     assert Path(str(observed_manifest["run_dir"])).is_relative_to(storage.root)
     assert observed_manifest.get("resume_checkpoint") is None
     assert first["dataset_classes"] == ["person", "helmet", "no_helmet"]
@@ -175,7 +203,7 @@ def test_create_maps_untrusted_requests_to_stable_errors(service_context, payloa
 def test_create_rejects_unavailable_dataset_before_allocating_run(service_context):
     """Catches a known-invalid configured dataset being queued for the worker."""
     service, _repository, storage, _manager, _factory, admin_id, settings = service_context
-    settings.training_dataset_yaml.unlink()
+    (settings.training_dataset_yaml.parent / "images" / "test").rmdir()
 
     with pytest.raises(TrainingServiceError) as captured:
         service.create(
@@ -185,6 +213,20 @@ def test_create_rejects_unavailable_dataset_before_allocating_run(service_contex
         )
 
     assert captured.value.code == "dataset_unavailable"
+    assert not storage.root.exists()
+
+
+def test_create_rejects_missing_local_weights_before_allocating_run(service_context):
+    service, _repository, storage, _manager, _factory, admin_id, _settings = service_context
+
+    with pytest.raises(TrainingServiceError) as captured:
+        service.create(
+            created_by=admin_id,
+            request=request(base_model="yolo11s.pt"),
+            idempotency_key="missing-weights-1",
+        )
+
+    assert captured.value.code == "weights_unavailable"
     assert not storage.root.exists()
 
 
@@ -223,18 +265,30 @@ def test_missing_job_operations_return_one_stable_error(service_context):
 
 
 def make_resumable(repository, storage, admin_id: int, suffix: str = "1"):
+    run_key = storage.create_run()
+    storage.write_dataset_snapshot(
+        run_key,
+        {
+            "path": storage.dataset_yaml.parent,
+            "train": "images/train",
+            "val": "images/val",
+            "test": "images/test",
+            "classes": ["person", "helmet", "no_helmet"],
+        },
+    )
     created = repository.create_job(
         {
             "created_by": admin_id,
             "executor": "local",
             "base_model": "yolo26l.pt",
-            "dataset_key": "configured",
+            "dataset_key": "dataset:1",
+            "training_dataset_id": 1,
             "epochs": 20,
             "imgsz": 960,
             "batch": "2",
             "device": "0",
             "patience": 5,
-            "run_key": storage.create_run(),
+            "run_key": run_key,
             "dataset_classes": ["person", "helmet", "no_helmet"],
             "idempotency_key": f"resume-source-{suffix}",
         }

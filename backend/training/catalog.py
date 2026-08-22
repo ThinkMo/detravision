@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -24,6 +25,7 @@ _DEVICES = frozenset({"auto", "cpu", "0"})
 
 @dataclass(frozen=True, slots=True)
 class TrainingRequest:
+    dataset_key: str
     base_model: str
     imgsz: int
     epochs: int
@@ -33,6 +35,13 @@ class TrainingRequest:
     executor: str = "local"
 
     def __post_init__(self) -> None:
+        if (
+            not isinstance(self.dataset_key, str)
+            or not self.dataset_key.startswith("dataset:")
+            or not self.dataset_key.removeprefix("dataset:").isdigit()
+            or int(self.dataset_key.removeprefix("dataset:")) < 1
+        ):
+            raise ValueError("unsupported dataset")
         if not isinstance(self.executor, str) or self.executor != "local":
             raise ValueError("executor is unavailable")
         if not isinstance(self.base_model, str) or self.base_model not in MODEL_IDS:
@@ -95,13 +104,32 @@ def _dataset_summary(settings: Settings) -> dict[str, Any]:
     }
 
 
-def training_catalog(settings: Settings) -> dict[str, Any]:
+def _model_available(settings: Settings, model_id: str) -> bool:
+    roots = (
+        Path(__file__).resolve().parents[2],
+        settings.training_model_cache_dir.resolve(),
+    )
+    for root in roots:
+        try:
+            candidate = (root / model_id).resolve()
+            candidate.relative_to(root)
+            if candidate.is_file():
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
+def training_catalog(settings: Settings, dataset_service=None) -> dict[str, Any]:
+    datasets = dataset_service.catalog() if dataset_service is not None else []
+    available_datasets = [item for item in datasets if item.get("available")]
     return {
         "models": [
             {
                 "id": model_id,
                 "series": model_id[4:6],
                 "size": model_id[6],
+                "available": _model_available(settings, model_id),
             }
             for model_id in MODEL_IDS
         ],
@@ -110,4 +138,8 @@ def training_catalog(settings: Settings) -> dict[str, Any]:
             {"id": "remote", "enabled": False},
         ],
         "dataset": _dataset_summary(settings),
+        "datasets": datasets,
+        "default_dataset_key": (
+            available_datasets[0]["key"] if available_datasets else None
+        ),
     }

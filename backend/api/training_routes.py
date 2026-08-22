@@ -10,8 +10,14 @@ from fastapi.routing import APIRoute
 from backend.audit import audit_service, audited_admin, request_ip
 from backend.auth import AuthenticatedUser
 from backend.auth.dependencies import require_same_origin
-from backend.schemas import TrainingJobCreate, TrainingModelRegister
+from backend.schemas import (
+    TrainingDatasetCreate,
+    TrainingDatasetUpdate,
+    TrainingJobCreate,
+    TrainingModelRegister,
+)
 from backend.training.catalog import TrainingRequest, training_catalog
+from backend.training.dataset_service import DatasetService, DatasetServiceError
 from backend.training.service import TrainingService, TrainingServiceError
 from backend.training.storage import TrainingStorage
 
@@ -64,6 +70,10 @@ def _storage(request: Request) -> TrainingStorage:
     return request.app.state.training_storage
 
 
+def _dataset_service(request: Request) -> DatasetService:
+    return request.app.state.training_dataset_service
+
+
 def _error(error: TrainingServiceError) -> JSONResponse:
     return JSONResponse(
         status_code=error.status_code,
@@ -96,11 +106,12 @@ def _record(
     outcome: str,
     *,
     details: dict[str, Any] | None = None,
+    resource: str = "training_job",
 ) -> None:
     audit_service(request).record(
         user.id,
         action,
-        "training_job",
+        resource,
         resource_id,
         outcome,
         request_ip(request),
@@ -126,7 +137,101 @@ def get_training_catalog(
     request: Request,
     _user: AuthenticatedUser = Depends(audited_admin("read", "training_catalog")),
 ) -> dict[str, Any]:
-    return training_catalog(request.app.state.settings)
+    return training_catalog(
+        request.app.state.settings, _dataset_service(request)
+    )
+
+
+def _dataset_error(error: DatasetServiceError) -> JSONResponse:
+    return JSONResponse(
+        status_code=error.status_code,
+        content={"code": error.code, "message": "The training dataset request failed."},
+    )
+
+
+@router.get("/training/dataset-roots")
+def list_training_dataset_roots(
+    request: Request,
+    _user: AuthenticatedUser = Depends(audited_admin("read", "training_dataset")),
+):
+    return {"items": _dataset_service(request).list_roots()}
+
+
+@router.get("/training/dataset-directories")
+def list_training_dataset_directories(
+    request: Request,
+    root_alias: str = Query(min_length=1, max_length=64),
+    path: str = Query(default="", max_length=512),
+    _user: AuthenticatedUser = Depends(audited_admin("read", "training_dataset")),
+):
+    try:
+        return {"items": _dataset_service(request).list_directories(root_alias, path)}
+    except DatasetServiceError as exc:
+        return _dataset_error(exc)
+
+
+@router.get("/training/datasets")
+def list_training_datasets(
+    request: Request,
+    _user: AuthenticatedUser = Depends(audited_admin("read", "training_dataset")),
+):
+    return {"items": _dataset_service(request).catalog()}
+
+
+@router.post("/training/datasets", status_code=status.HTTP_201_CREATED)
+def create_training_dataset(
+    payload: TrainingDatasetCreate,
+    request: Request,
+    user: AuthenticatedUser = Depends(
+        audited_admin("training_dataset_create", "training_dataset")
+    ),
+):
+    try:
+        item = _dataset_service(request).create(
+            payload.model_dump(), created_by=user.id
+        )
+    except DatasetServiceError as exc:
+        _record(request, user, "training_dataset_create", None, "rejected", details={"code": exc.code}, resource="training_dataset")
+        return _dataset_error(exc)
+    _record(request, user, "training_dataset_create", item["id"], "success", resource="training_dataset")
+    return item
+
+
+@router.patch("/training/datasets/{dataset_id}")
+def update_training_dataset(
+    dataset_id: int,
+    payload: TrainingDatasetUpdate,
+    request: Request,
+    user: AuthenticatedUser = Depends(
+        audited_admin("training_dataset_update", "training_dataset")
+    ),
+):
+    try:
+        item = _dataset_service(request).update(
+            dataset_id, payload.model_dump(exclude_none=True)
+        )
+    except DatasetServiceError as exc:
+        _record(request, user, "training_dataset_update", dataset_id, "rejected", details={"code": exc.code}, resource="training_dataset")
+        return _dataset_error(exc)
+    _record(request, user, "training_dataset_update", dataset_id, "success", resource="training_dataset")
+    return item
+
+
+@router.delete("/training/datasets/{dataset_id}", status_code=status.HTTP_204_NO_CONTENT)
+def disable_training_dataset(
+    dataset_id: int,
+    request: Request,
+    user: AuthenticatedUser = Depends(
+        audited_admin("training_dataset_disable", "training_dataset")
+    ),
+):
+    try:
+        _dataset_service(request).disable(dataset_id)
+    except DatasetServiceError as exc:
+        _record(request, user, "training_dataset_disable", dataset_id, "rejected", details={"code": exc.code}, resource="training_dataset")
+        return _dataset_error(exc)
+    _record(request, user, "training_dataset_disable", dataset_id, "success", resource="training_dataset")
+    return None
 
 
 @router.get("/training-jobs")

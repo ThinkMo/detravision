@@ -116,6 +116,33 @@ class DatasetService:
     def catalog(self) -> list[dict[str, Any]]:
         return [self._public(row) for row in self._repository.list()]
 
+    def resolve(self, key: str) -> dict[str, Any]:
+        if not isinstance(key, str) or not key.startswith("dataset:"):
+            raise DatasetServiceError("dataset_not_found")
+        try:
+            dataset_id = int(key.removeprefix("dataset:"))
+        except ValueError as exc:
+            raise DatasetServiceError("dataset_not_found") from exc
+        if dataset_id < 1:
+            raise DatasetServiceError("dataset_not_found")
+        row = self._repository.get(dataset_id)
+        if row is None:
+            raise DatasetServiceError("dataset_not_found")
+        if not row["enabled"]:
+            raise DatasetServiceError("dataset_invalid")
+        validated = self._validate(row)
+        root = self._root(validated["root_alias"])
+        dataset_path = self._contained(root, root / validated["directory"])
+        return {
+            "key": key,
+            "training_dataset_id": dataset_id,
+            "path": dataset_path,
+            "train": validated["train_split"],
+            "val": validated["val_split"],
+            "test": validated["test_split"],
+            "classes": list(validated["classes"]),
+        }
+
     def _root(self, alias: object) -> Path:
         if not isinstance(alias, str):
             raise DatasetServiceError("root_not_found")

@@ -55,13 +55,44 @@ class FakeTrainingService:
         return {"id": 9, "name": name or "candidate", "is_active": False, "source": "training"}
 
 
+class FakeDatasetService:
+    def __init__(self) -> None:
+        self.item = {
+            "id": 3, "key": "dataset:3", "name": "Site A",
+            "root_alias": "primary", "directory": "site-a",
+            "train_split": "images/train", "val_split": "images/val",
+            "test_split": "images/test", "classes": ["person", "helmet", "no_helmet"],
+            "enabled": True, "available": True, "reason": None,
+        }
+
+    def list_roots(self):
+        return [{"alias": "primary"}]
+
+    def list_directories(self, root_alias: str, relative: str):
+        if root_alias != "primary":
+            raise AssertionError("unexpected root")
+        return [{"name": "site-a", "path": "site-a"}] if not relative else []
+
+    def catalog(self):
+        return [self.item]
+
+    def create(self, values, *, created_by: int):
+        return self.item
+
+    def update(self, dataset_id: int, values):
+        return {**self.item, **values}
+
+    def disable(self, dataset_id: int):
+        return {**self.item, "enabled": False, "available": False, "reason": "dataset_disabled"}
+
+
 def _job(run_key: str) -> dict:
     return {
         "id": 1,
         "created_by": 7,
         "executor": "local",
         "base_model": "yolo11m.pt",
-        "dataset_key": "configured",
+        "dataset_key": "dataset:3",
         "dataset_classes": ["helmet", "no_helmet"],
         "epochs": 100,
         "imgsz": 640,
@@ -102,6 +133,7 @@ def _app(tmp_path: Path, *, role: str = "admin") -> tuple[FastAPI, FakeTrainingS
     dataset.write_text("train: train\nval: val\ntest: test\nnames: [helmet, no_helmet]\n", encoding="utf-8")
     settings = Settings(
         training_dataset_yaml=dataset,
+        training_dataset_roots_raw=f"primary={tmp_path}",
         training_run_dir=tmp_path / "runs",
         training_model_cache_dir=tmp_path / "models",
     )
@@ -118,6 +150,7 @@ def _app(tmp_path: Path, *, role: str = "admin") -> tuple[FastAPI, FakeTrainingS
     app.state.settings = settings
     app.state.training_service = service
     app.state.training_storage = storage
+    app.state.training_dataset_service = FakeDatasetService()
     app.state.audit_service = audit
     app.dependency_overrides[current_user] = lambda: AuthenticatedUser(
         id=7, username="tester", role=role, must_change_password=False
@@ -146,7 +179,7 @@ def test_training_catalog_and_job_dtos_hide_server_fields(tmp_path: Path) -> Non
 def test_training_mutations_use_idempotency_and_stable_errors(tmp_path: Path) -> None:
     app, service, audit = _app(tmp_path)
     payload = {
-        "executor": "local", "base_model": "yolo26x.pt", "imgsz": 960,
+        "dataset_key": "dataset:3", "executor": "local", "base_model": "yolo26x.pt", "imgsz": 960,
         "epochs": 10, "batch": "auto", "device": "0", "patience": 5,
     }
     with TestClient(app) as client:
@@ -175,7 +208,7 @@ def test_training_validation_uses_stable_error_shape(tmp_path: Path) -> None:
         response = client.post(
             "/api/training-jobs",
             json={
-                "executor": "local", "base_model": "yolo11m.pt", "imgsz": 640,
+                "dataset_key": "dataset:3", "executor": "local", "base_model": "yolo11m.pt", "imgsz": 640,
                 "epochs": 0, "batch": "auto", "device": "auto", "patience": 50,
             },
             headers={"Idempotency-Key": "request_789"},
@@ -210,3 +243,45 @@ def test_training_api_requires_admin_and_same_origin(tmp_path: Path) -> None:
             "/api/training-jobs/1/stop",
             headers={"Origin": "https://evil.invalid"},
         ).status_code == 403
+
+
+def test_training_dataset_admin_routes_are_safe_and_audited(tmp_path: Path) -> None:
+    app, _service, audit = _app(tmp_path)
+    definition = {
+        "name": "Site A", "root_alias": "primary", "directory": "site-a",
+        "train_split": "images/train", "val_split": "images/val",
+        "test_split": "images/test", "classes": ["person", "helmet", "no_helmet"],
+    }
+    with TestClient(app) as client:
+        roots = client.get("/api/training/dataset-roots")
+        directories = client.get(
+            "/api/training/dataset-directories", params={"root_alias": "primary", "path": ""}
+        )
+        listed = client.get("/api/training/datasets")
+        created = client.post("/api/training/datasets", json=definition)
+        updated = client.patch("/api/training/datasets/3", json={"name": "Renamed"})
+        disabled = client.delete("/api/training/datasets/3")
+
+    assert roots.status_code == directories.status_code == listed.status_code == 200
+    assert created.status_code == 201
+    assert updated.status_code == 200
+    assert disabled.status_code == 204
+    serialized = roots.text + directories.text + listed.text + created.text + updated.text
+    assert str(tmp_path) not in serialized
+    assert any(row[0][1] == "training_dataset_create" for row in audit.rows)
+
+
+def test_training_job_create_requires_dataset_key(tmp_path: Path) -> None:
+    app, _service, _audit = _app(tmp_path)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/training-jobs",
+            json={
+                "executor": "local", "base_model": "yolo11m.pt", "imgsz": 640,
+                "epochs": 1, "batch": "1", "device": "cpu", "patience": 0,
+            },
+            headers={"Idempotency-Key": "missing-dataset-key"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_training_request"

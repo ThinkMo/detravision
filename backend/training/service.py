@@ -14,7 +14,8 @@ from backend.core.public_records import public_model
 from backend.db.repositories import Repository
 from training.contracts import TrainingManifest, atomic_write_json
 
-from .catalog import TrainingRequest, training_catalog
+from .catalog import TrainingRequest
+from .dataset_service import DatasetService, DatasetServiceError
 from .repository import TrainingRepository
 from .storage import TrainingStorage
 
@@ -43,12 +44,14 @@ class TrainingService:
         model_repository: Repository,
         manager: TrainingManager,
         settings: Settings,
+        dataset_service: DatasetService,
     ) -> None:
         self._repository = repository
         self._storage = storage
         self._model_repository = model_repository
         self._manager = manager
         self._settings = settings
+        self._dataset_service = dataset_service
 
     def create(
         self,
@@ -59,18 +62,21 @@ class TrainingService:
     ) -> dict[str, Any]:
         normalized = self._request(request)
         key = self._idempotency_key(idempotency_key)
-        dataset = self._require_dataset()
+        dataset = self._require_dataset(normalized.dataset_key)
+        self._require_weights(normalized.base_model)
         run_key = self._storage.create_run()
         run_dir = self._storage.run_path(run_key)
-        manifest = self._manifest(normalized, run_dir)
         try:
+            dataset_yaml = self._storage.write_dataset_snapshot(run_key, dataset)
+            manifest = self._manifest(normalized, run_dir, dataset_yaml=dataset_yaml)
             atomic_write_json(run_dir / "manifest.json", manifest.to_json())
             job = self._repository.create_job(
                 {
                     "created_by": created_by,
                     "executor": normalized.executor,
                     "base_model": normalized.base_model,
-                    "dataset_key": "configured",
+                    "dataset_key": normalized.dataset_key,
+                    "training_dataset_id": dataset["training_dataset_id"],
                     "dataset_classes": dataset["classes"],
                     "epochs": normalized.epochs,
                     "imgsz": normalized.imgsz,
@@ -94,7 +100,8 @@ class TrainingService:
                 "created_by": created_by,
                 "executor": normalized.executor,
                 "base_model": normalized.base_model,
-                "dataset_key": "configured",
+                "dataset_key": normalized.dataset_key,
+                "training_dataset_id": dataset["training_dataset_id"],
                 "dataset_classes": dataset["classes"],
                 "epochs": normalized.epochs,
                 "imgsz": normalized.imgsz,
@@ -176,6 +183,7 @@ class TrainingService:
             resume_checkpoint.parent.mkdir(parents=True)
             shutil.copy2(source_checkpoint, resume_checkpoint)
             normalized = TrainingRequest(
+                dataset_key=str(source["dataset_key"]),
                 executor=str(source["executor"]),
                 base_model=str(source["base_model"]),
                 imgsz=int(source["imgsz"]),
@@ -184,9 +192,22 @@ class TrainingService:
                 device=str(source["device"]),
                 patience=int(source["patience"]),
             )
+            try:
+                source_run = self._storage.run_path(str(source["run_key"]))
+                source_dataset = (source_run / "dataset.yaml").resolve()
+                source_dataset.relative_to(source_run)
+                if not source_dataset.is_file():
+                    raise FileNotFoundError("dataset snapshot unavailable")
+                dataset_yaml = run_dir / "dataset.yaml"
+                shutil.copy2(source_dataset, dataset_yaml)
+            except (OSError, ValueError) as exc:
+                raise TrainingServiceError(
+                    409, "dataset_unavailable", "The training dataset is unavailable."
+                ) from exc
             manifest = self._manifest(
                 normalized,
                 run_dir,
+                dataset_yaml=dataset_yaml.resolve(),
                 resume_checkpoint=resume_checkpoint.resolve(),
             )
             atomic_write_json(run_dir / "manifest.json", manifest.to_json())
@@ -311,12 +332,13 @@ class TrainingService:
         request: TrainingRequest,
         run_dir: Path,
         *,
+        dataset_yaml: Path,
         resume_checkpoint: Path | None = None,
     ) -> TrainingManifest:
         return TrainingManifest.from_json(
             {
                 "base_model": request.base_model,
-                "dataset_yaml": str(self._storage.dataset_yaml),
+                "dataset_yaml": str(dataset_yaml.resolve()),
                 "run_dir": str(run_dir.resolve()),
                 "model_cache_dir": str(self._storage.model_cache_root),
                 "epochs": request.epochs,
@@ -353,15 +375,34 @@ class TrainingService:
             )
             raise TrainingServiceError(422, code, message) from exc
 
-    def _require_dataset(self) -> dict[str, Any]:
-        dataset = training_catalog(self._settings)["dataset"]
-        if not dataset["available"] or not dataset["has_test_split"]:
+    def _require_dataset(self, key: str) -> dict[str, Any]:
+        try:
+            return self._dataset_service.resolve(key)
+        except DatasetServiceError as exc:
             raise TrainingServiceError(
                 409,
                 "dataset_unavailable",
-                "The configured training dataset is unavailable.",
-            )
-        return dataset
+                "The selected training dataset is unavailable.",
+            ) from exc
+
+    def _require_weights(self, model_id: str) -> None:
+        roots = (
+            Path(__file__).resolve().parents[2],
+            self._storage.model_cache_root,
+        )
+        for root in roots:
+            try:
+                candidate = (root / model_id).resolve()
+                candidate.relative_to(root)
+                if candidate.is_file():
+                    return
+            except (OSError, ValueError):
+                continue
+        raise TrainingServiceError(
+            409,
+            "weights_unavailable",
+            "The selected base-model weights are unavailable.",
+        )
 
     @staticmethod
     def _idempotency_key(value: str) -> str:

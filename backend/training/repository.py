@@ -107,6 +107,7 @@ class TrainingRepository:
             executor=str(values["executor"]),
             base_model=str(values["base_model"]),
             dataset_key=str(values["dataset_key"]),
+            training_dataset_id=values.get("training_dataset_id"),
             dataset_classes=json.dumps(
                 list(values.get("dataset_classes", [])),
                 ensure_ascii=False,
@@ -357,6 +358,7 @@ class TrainingRepository:
                 "executor": source.executor,
                 "base_model": source.base_model,
                 "dataset_key": source.dataset_key,
+                "training_dataset_id": source.training_dataset_id,
                 "dataset_classes": source.dataset_classes,
                 "epochs": source.epochs,
                 "imgsz": source.imgsz,

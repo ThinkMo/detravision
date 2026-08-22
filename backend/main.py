@@ -33,6 +33,8 @@ from backend.model_activation import ModelActivationService
 from backend.pipeline import RuntimeManager
 from backend.storage import LocalFileStorage
 from backend.training import LocalTrainingManager, TrainingRepository, TrainingService
+from backend.training.dataset_repository import TrainingDatasetRepository
+from backend.training.dataset_service import DatasetService
 from backend.training.storage import TrainingStorage
 from backend.web import mount_frontend
 from backend.ws import EventHub
@@ -84,6 +86,10 @@ def application_lifespan(app_settings: Settings):
             runtime=runtime,
         )
         training_repository = TrainingRepository(session_factory)
+        training_dataset_repository = TrainingDatasetRepository(session_factory)
+        training_dataset_service = DatasetService(
+            app_settings, training_dataset_repository
+        )
         training_storage = TrainingStorage(app_settings)
         training_manager = LocalTrainingManager(
             training_repository,
@@ -96,6 +102,7 @@ def application_lifespan(app_settings: Settings):
             repository,
             training_manager,
             app_settings,
+            training_dataset_service,
         )
         app.state.settings = app_settings
         app.state.repository = repository
@@ -116,6 +123,7 @@ def application_lifespan(app_settings: Settings):
         app.state.training_storage = training_storage
         app.state.training_manager = training_manager
         app.state.training_service = training_service
+        app.state.training_dataset_service = training_dataset_service
         runtime_started = False
         try:
             await runtime.start()

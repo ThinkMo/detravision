@@ -143,6 +143,7 @@ class BatchJobPageResponse(BaseModel):
 
 class TrainingJobCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    dataset_key: str = Field(min_length=9, max_length=100)
     executor: str = "local"
     base_model: str
     imgsz: Literal[640, 960] = 640
@@ -155,3 +156,26 @@ class TrainingJobCreate(BaseModel):
 class TrainingModelRegister(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class TrainingDatasetCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=200)
+    root_alias: str = Field(min_length=1, max_length=64)
+    directory: str = Field(min_length=1, max_length=512)
+    train_split: str = Field(min_length=1, max_length=512)
+    val_split: str = Field(min_length=1, max_length=512)
+    test_split: str = Field(min_length=1, max_length=512)
+    classes: list[str] = Field(min_length=1, max_length=100)
+
+
+class TrainingDatasetUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    root_alias: str | None = Field(default=None, min_length=1, max_length=64)
+    directory: str | None = Field(default=None, min_length=1, max_length=512)
+    train_split: str | None = Field(default=None, min_length=1, max_length=512)
+    val_split: str | None = Field(default=None, min_length=1, max_length=512)
+    test_split: str | None = Field(default=None, min_length=1, max_length=512)
+    classes: list[str] | None = Field(default=None, min_length=1, max_length=100)
+    enabled: bool | None = None

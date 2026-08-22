@@ -37,6 +37,7 @@ def make_settings(tmp_path: Path, **overrides: object) -> Settings:
     )
     values: dict[str, object] = {
         "training_dataset_yaml": dataset,
+        "training_dataset_roots_raw": f"primary={tmp_path}",
         "training_run_dir": tmp_path / "runs",
         "training_model_cache_dir": tmp_path / "models",
     }
@@ -54,6 +55,18 @@ def test_catalog_exposes_only_fixed_models_and_disabled_remote(tmp_path: Path):
         {"id": "local", "enabled": True},
         {"id": "remote", "enabled": False},
     ]
+
+
+def test_catalog_reports_local_weight_availability(tmp_path: Path):
+    settings = make_settings(tmp_path)
+    settings.training_model_cache_dir.mkdir()
+    (settings.training_model_cache_dir / "yolo11s.pt").write_bytes(b"weights")
+
+    catalog = training_catalog(settings)
+
+    availability = {model["id"]: model["available"] for model in catalog["models"]}
+    assert availability["yolo11s.pt"] is True
+    assert availability["yolo11m.pt"] is False
 
 
 def test_catalog_summarizes_dataset_without_exposing_server_path(tmp_path: Path):
@@ -147,6 +160,7 @@ def test_training_request_rejects_values_outside_safe_catalog_and_bounds(
 ):
     """Catches untrusted paths, executors, or unbounded values reaching a worker."""
     payload: dict[str, object] = {
+        "dataset_key": "dataset:1",
         "executor": "local",
         "base_model": "yolo11m.pt",
         "imgsz": 640,
@@ -177,6 +191,7 @@ def test_training_request_rejects_values_with_unsafe_types(
 ):
     """Catches coercible or incomparable values bypassing stable request validation."""
     payload: dict[str, object] = {
+        "dataset_key": "dataset:1",
         "executor": "local",
         "base_model": "yolo11m.pt",
         "imgsz": 640,
@@ -208,6 +223,7 @@ def test_training_request_accepts_documented_boundary_values(
     """Catches valid boundary options being rejected by server-side validation."""
     for value in values:
         payload = {
+            "dataset_key": "dataset:1",
             "executor": "local",
             "base_model": "yolo26x.pt",
             "imgsz": 640,
