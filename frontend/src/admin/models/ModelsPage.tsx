@@ -1,7 +1,7 @@
 import { FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
-import type { ModelVersion, TrainingJobCreate } from "../../api/types";
+import type { ModelVersion, TrainingDataset, TrainingJobCreate } from "../../api/types";
 import { EmptyState } from "../../components/EmptyState";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { LoadingPanel } from "../../components/LoadingPanel";
@@ -9,6 +9,7 @@ import { AdminHeading, AdminNotice, ConfirmDialog, errorMessage } from "../share
 import { TrainingJobDialog } from "./TrainingJobDialog";
 import { TrainingJobsPanel } from "./TrainingJobsPanel";
 import { TrainingDatasetsPanel } from "./TrainingDatasetsPanel";
+import { AnnotationWorkspace } from "./AnnotationWorkspace";
 import { trainingApi } from "./trainingApi";
 
 type ModelForm = { name: string; path: string; runtime: ModelVersion["runtime"]; classes: string; map50: string };
@@ -37,6 +38,7 @@ export function ModelsPage() {
   const [tab, setTab] = useState<"models" | "datasets" | "training">("models");
   const [showTraining, setShowTraining] = useState(false);
   const [message, setMessage] = useState("");
+  const [annotating, setAnnotating] = useState<TrainingDataset | null>(null);
   const catalog = useQuery({ queryKey: ["admin", "training", "catalog"], queryFn: trainingApi.catalog, enabled: tab === "training" });
   const createTraining = useMutation({ mutationFn: (value: TrainingJobCreate) => trainingApi.create(value), onSuccess: () => { setShowTraining(false); setMessage("训练任务已加入队列"); void client.invalidateQueries({ queryKey: ["admin", "training-jobs"] }); } });
   const hasDataset = Boolean(catalog.data?.datasets.some((dataset) => dataset.available));
@@ -50,7 +52,7 @@ export function ModelsPage() {
       <button type="button" role="tab" aria-selected={tab === "training"} className={tab === "training" ? "admin-tabs__active" : ""} onClick={() => setTab("training")}>训练任务</button>
     </div>
     {tab === "models" ? <ModelVersions message={message} setMessage={setMessage} /> : null}
-    {tab === "datasets" ? <TrainingDatasetsPanel /> : null}
+    {tab === "datasets" ? annotating ? <AnnotationWorkspace dataset={annotating} onClose={() => setAnnotating(null)} /> : <TrainingDatasetsPanel onAnnotate={setAnnotating} /> : null}
     {tab === "training" ? catalog.isLoading ? <LoadingPanel label="正在加载训练配置" /> : catalog.isError || !catalog.data ? <ErrorPanel message="无法读取训练配置" onRetry={() => void catalog.refetch()} /> : <>
       <div className="admin-subheading">
         <div><h2>训练任务</h2><small>创建、查看并管理本地模型训练</small></div>

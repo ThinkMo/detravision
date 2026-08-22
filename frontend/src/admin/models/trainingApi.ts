@@ -42,6 +42,7 @@ export const trainingApi = {
   confirmEmpty: (datasetId: number, imageId: number, revision: number) => api.request<TrainingDatasetImageDetail>(`/api/training/datasets/${datasetId}/images/${imageId}/confirm-empty`, { method: "POST", body: JSON.stringify({ revision }) }),
   validateDataset: (id: number) => api.request<DatasetValidationReport>(`/api/training/datasets/${id}/validate`, { method: "POST" }),
   publishDataset: (id: number, revision: number, confirmWarnings: boolean) => api.request<TrainingDataset>(`/api/training/datasets/${id}/publish`, { method: "POST", body: JSON.stringify({ revision, confirm_warnings: confirmWarnings }) }),
+  addDatasetClass: (id: number, revision: number, name: string) => api.request<TrainingDataset>(`/api/training/datasets/${id}/classes`, { method: "POST", body: JSON.stringify({ revision, name }) }),
   create: (value: TrainingJobCreate, key = idempotencyKey()) => api.request<TrainingJob>("/api/training-jobs", {
     method: "POST",
     headers: { "Idempotency-Key": key },

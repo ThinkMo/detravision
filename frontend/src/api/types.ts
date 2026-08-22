@@ -134,6 +134,7 @@ export interface TrainingDatasetImage {
   dataset_id: number;
   split: "train" | "val" | "test";
   image_key: string;
+  display_name: string;
   width: number;
   height: number;
   review_status: "pending_annotation" | "annotated" | "confirmed_empty";
