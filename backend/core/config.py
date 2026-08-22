@@ -2,9 +2,46 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from numbers import Real
 from pathlib import Path
+
+
+_DATASET_ROOT_ALIAS = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _default_training_dataset_roots() -> str:
+    return f"default={_PROJECT_ROOT / 'datasets'}"
+
+
+def _parse_training_dataset_roots(value: str) -> tuple[tuple[str, Path], ...]:
+    roots: list[tuple[str, Path]] = []
+    aliases: set[str] = set()
+    for raw_entry in value.split(";"):
+        alias, separator, raw_path = raw_entry.partition("=")
+        if (
+            not separator
+            or not _DATASET_ROOT_ALIAS.fullmatch(alias)
+            or alias in aliases
+            or not raw_path
+        ):
+            raise ValueError("TRAINING_DATASET_ROOTS has an invalid entry")
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute() or not path.is_dir():
+            raise ValueError("TRAINING_DATASET_ROOTS paths must be existing directories")
+        resolved = path.resolve()
+        for _, existing in roots:
+            if resolved == existing:
+                raise ValueError("TRAINING_DATASET_ROOTS contains duplicate roots")
+            if resolved in existing.parents or existing in resolved.parents:
+                raise ValueError("TRAINING_DATASET_ROOTS contains nested roots")
+        aliases.add(alias)
+        roots.append((alias, resolved))
+    if not roots:
+        raise ValueError("TRAINING_DATASET_ROOTS must not be empty")
+    return tuple(roots)
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -40,6 +77,10 @@ class Settings:
             "training/configs/construction-ppe-helmet.yaml",
         )
     )
+    training_dataset_roots_raw: str = os.getenv(
+        "TRAINING_DATASET_ROOTS", _default_training_dataset_roots()
+    )
+    training_dataset_roots: tuple[tuple[str, Path], ...] = field(init=False)
     training_run_dir: Path = Path(
         os.getenv("TRAINING_RUN_DIR", "data/training-runs")
     )
@@ -54,6 +95,11 @@ class Settings:
     )
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "training_dataset_roots",
+            _parse_training_dataset_roots(self.training_dataset_roots_raw),
+        )
         if self.batch_retention_days < 1:
             raise ValueError("BATCH_RETENTION_DAYS must be positive")
         if self.batch_worker_count != 1:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, Index, Integer, String, Table, Text, Column, text
+from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, Index, Integer, String, Table, Text, Column, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, UtcDateTime
@@ -115,6 +115,37 @@ class UserSession(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP"))
 
 
+class TrainingDataset(Base):
+    __tablename__ = "training_dataset"
+    __table_args__ = (
+        UniqueConstraint(
+            "root_alias", "directory", name="uq_training_dataset_root_directory"
+        ),
+        Index("ix_training_dataset_enabled", "enabled"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    root_alias: Mapped[str] = mapped_column(String(32), nullable=False)
+    directory: Mapped[str] = mapped_column(String(512), nullable=False)
+    train_split: Mapped[str] = mapped_column(String(512), nullable=False)
+    val_split: Mapped[str] = mapped_column(String(512), nullable=False)
+    test_split: Mapped[str] = mapped_column(String(512), nullable=False)
+    classes: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("1")
+    )
+    created_by: Mapped[int] = mapped_column(
+        ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
 class TrainingJob(Base):
     __tablename__ = "training_job"
     __table_args__ = (
@@ -134,6 +165,9 @@ class TrainingJob(Base):
     base_model: Mapped[str] = mapped_column(String(30), nullable=False)
     dataset_key: Mapped[str] = mapped_column(String(100), nullable=False)
     dataset_classes: Mapped[str | None] = mapped_column(Text)
+    training_dataset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("training_dataset.id", ondelete="SET NULL"), index=True
+    )
     epochs: Mapped[int] = mapped_column(Integer, nullable=False)
     imgsz: Mapped[int] = mapped_column(Integer, nullable=False)
     batch: Mapped[str] = mapped_column(String(20), nullable=False)

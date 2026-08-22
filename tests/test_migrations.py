@@ -199,6 +199,73 @@ def test_training_job_uses_portable_text_status_and_metrics():
     assert TrainingScheduler.__table__.c.id.primary_key is True
 
 
+def test_training_dataset_migration_adds_definition_and_job_reference(tmp_path):
+    """Catches losing selectable dataset definitions or job provenance."""
+    url = "sqlite:///" + (tmp_path / "training-dataset-schema.db").as_posix()
+    run_migrations(url)
+    inspector = inspect(create_engine(url))
+
+    assert "training_dataset" in inspector.get_table_names()
+    columns = {
+        column["name"]: column
+        for column in inspector.get_columns("training_dataset")
+    }
+    assert {
+        "id", "name", "root_alias", "directory", "train_split", "val_split",
+        "test_split", "classes", "enabled", "created_by", "created_at", "updated_at",
+    } <= columns.keys()
+    assert isinstance(columns["classes"]["type"], Text)
+    unique_locations = {
+        tuple(item["column_names"])
+        for item in inspector.get_unique_constraints("training_dataset")
+    }
+    assert ("root_alias", "directory") in unique_locations
+    job_foreign_keys = {
+        (tuple(item["constrained_columns"]), item["referred_table"])
+        for item in inspector.get_foreign_keys("training_job")
+    }
+    assert (("training_dataset_id",), "training_dataset") in job_foreign_keys
+
+
+def test_mysql_training_dataset_migration_is_offline_portable():
+    """Catches SQLite-only DDL or MySQL-incompatible JSON/default fields."""
+    output = StringIO()
+    config = alembic_config(
+        "mysql+pymysql://safety:safety@127.0.0.1/safety_test?charset=utf8mb4"
+    )
+    config.output_buffer = output
+
+    command.upgrade(config, "0007", sql=True)
+
+    sql = output.getvalue()
+    assert "CREATE TABLE training_dataset" in sql
+    assert "classes TEXT NOT NULL" in sql
+    assert "enabled BOOL NOT NULL DEFAULT 1" in sql
+    assert "UNIQUE (root_alias, directory)" in sql
+    assert "training_dataset_id INTEGER" in sql
+
+
+def test_training_dataset_migration_downgrades_and_reupgrades(tmp_path):
+    """Catches a migration that cannot safely roll back to the prior head."""
+    url = "sqlite:///" + (tmp_path / "training-dataset-roundtrip.db").as_posix()
+    config = alembic_config(url)
+    command.upgrade(config, "0007")
+    command.downgrade(config, "0006")
+
+    inspector = inspect(create_engine(url))
+    assert "training_dataset" not in inspector.get_table_names()
+    assert "training_dataset_id" not in {
+        column["name"] for column in inspector.get_columns("training_job")
+    }
+
+    command.upgrade(config, "0007")
+    inspector = inspect(create_engine(url))
+    assert "training_dataset" in inspector.get_table_names()
+    assert "training_dataset_id" in {
+        column["name"] for column in inspector.get_columns("training_job")
+    }
+
+
 def test_mysql_training_migration_emits_portable_text_defaults():
     """Catches MySQL-incompatible defaults in the training migration."""
     output = StringIO()

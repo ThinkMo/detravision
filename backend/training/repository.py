@@ -52,6 +52,7 @@ def training_job_dict(row: TrainingJob) -> dict[str, Any]:
         "base_model": row.base_model,
         "dataset_key": row.dataset_key,
         "dataset_classes": _decode_classes(row.dataset_classes),
+        "training_dataset_id": row.training_dataset_id,
         "epochs": row.epochs,
         "imgsz": row.imgsz,
         "batch": row.batch,
