@@ -122,7 +122,7 @@ describe("model training console", () => {
     expect(trainingPollingInterval({ state: { data: { items: [{ status: "completed" }, { status: "failed" }] } } })).toBe(false);
   });
 
-  it("defines a training dataset from server-provided directories", async () => {
+  it("places datasets beside training jobs and keeps its action below the tabs", async () => {
     let created: Record<string, unknown> | null = null;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
@@ -137,8 +137,9 @@ describe("model training console", () => {
     }));
 
     renderPage();
-    await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
-    await userEvent.click(await screen.findByRole("button", { name: "管理训练集" }));
+    expect((await screen.findAllByRole("tab")).map((tab) => tab.textContent)).toEqual(["模型版本", "训练集", "训练任务"]);
+    expect(screen.queryByRole("button", { name: "管理训练集" })).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("tab", { name: "训练集" }));
     await userEvent.click(await screen.findByRole("button", { name: "定义训练集" }));
     const dialog = await screen.findByRole("dialog", { name: "定义服务器训练集" });
     await userEvent.type(within(dialog).getByLabelText("训练集名称"), "现场 A");

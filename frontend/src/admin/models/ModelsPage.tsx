@@ -34,15 +34,31 @@ function ModelVersions({ message, setMessage }: { message: string; setMessage: (
 
 export function ModelsPage() {
   const client = useQueryClient();
-  const [tab, setTab] = useState<"models" | "training">("models");
+  const [tab, setTab] = useState<"models" | "datasets" | "training">("models");
   const [showTraining, setShowTraining] = useState(false);
-  const [showDatasets, setShowDatasets] = useState(false);
   const [message, setMessage] = useState("");
   const catalog = useQuery({ queryKey: ["admin", "training", "catalog"], queryFn: trainingApi.catalog, enabled: tab === "training" });
   const createTraining = useMutation({ mutationFn: (value: TrainingJobCreate) => trainingApi.create(value), onSuccess: () => { setShowTraining(false); setMessage("训练任务已加入队列"); void client.invalidateQueries({ queryKey: ["admin", "training-jobs"] }); } });
+  const hasDataset = Boolean(catalog.data?.datasets.some((dataset) => dataset.available));
+  const hasModel = Boolean(catalog.data?.models.some((model) => model.available));
+
   return <section className="admin-page">
-    <AdminHeading eyebrow="MODEL & TRAINING" title="模型管理" description="训练、评估、注册并安全切换后端识别模型" action={tab === "training" ? <div className="training-heading-actions"><button type="button" className="secondary-button" onClick={() => setShowDatasets((value) => !value)}>管理训练集</button><button type="button" disabled={!catalog.data?.datasets.some((dataset) => dataset.available) || !catalog.data?.models.some((model) => model.available)} onClick={() => { createTraining.reset(); setShowTraining(true); }}>新建训练</button></div> : undefined} />
-    <div className="admin-tabs" role="tablist" aria-label="模型管理视图"><button type="button" role="tab" aria-selected={tab === "models"} className={tab === "models" ? "admin-tabs__active" : ""} onClick={() => setTab("models")}>模型版本</button><button type="button" role="tab" aria-selected={tab === "training"} className={tab === "training" ? "admin-tabs__active" : ""} onClick={() => setTab("training")}>训练任务</button></div>
-    {tab === "models" ? <ModelVersions message={message} setMessage={setMessage} /> : catalog.isLoading ? <LoadingPanel label="正在加载训练配置" /> : catalog.isError || !catalog.data ? <ErrorPanel message="无法读取训练配置" onRetry={() => void catalog.refetch()} /> : <>{showDatasets ? <TrainingDatasetsPanel /> : null}<AdminNotice message={message || (!catalog.data.datasets.some((dataset) => dataset.available) ? "请先定义一个可用的服务器训练集" : !catalog.data.models.some((model) => model.available) ? "请先准备基础模型权重" : "")} error={!catalog.data.datasets.some((dataset) => dataset.available) || !catalog.data.models.some((model) => model.available)} /><TrainingJobsPanel onRegistered={() => void client.invalidateQueries({ queryKey: ["admin", "models"] })} />{showTraining ? <TrainingJobDialog catalog={catalog.data} pending={createTraining.isPending} error={createTraining.isError ? errorMessage(createTraining.error, "创建训练任务失败") : ""} onClose={() => setShowTraining(false)} onSubmit={(value) => createTraining.mutate(value)} /> : null}</>}
+    <AdminHeading eyebrow="MODEL & TRAINING" title="模型管理" description="训练、评估、注册并安全切换后端识别模型" />
+    <div className="admin-tabs" role="tablist" aria-label="模型管理视图">
+      <button type="button" role="tab" aria-selected={tab === "models"} className={tab === "models" ? "admin-tabs__active" : ""} onClick={() => setTab("models")}>模型版本</button>
+      <button type="button" role="tab" aria-selected={tab === "datasets"} className={tab === "datasets" ? "admin-tabs__active" : ""} onClick={() => setTab("datasets")}>训练集</button>
+      <button type="button" role="tab" aria-selected={tab === "training"} className={tab === "training" ? "admin-tabs__active" : ""} onClick={() => setTab("training")}>训练任务</button>
+    </div>
+    {tab === "models" ? <ModelVersions message={message} setMessage={setMessage} /> : null}
+    {tab === "datasets" ? <TrainingDatasetsPanel /> : null}
+    {tab === "training" ? catalog.isLoading ? <LoadingPanel label="正在加载训练配置" /> : catalog.isError || !catalog.data ? <ErrorPanel message="无法读取训练配置" onRetry={() => void catalog.refetch()} /> : <>
+      <div className="admin-subheading">
+        <div><h2>训练任务</h2><small>创建、查看并管理本地模型训练</small></div>
+        <button type="button" disabled={!hasDataset || !hasModel} onClick={() => { createTraining.reset(); setShowTraining(true); }}>新建训练</button>
+      </div>
+      <AdminNotice message={message || (!hasDataset ? "请先定义一个可用的服务器训练集" : !hasModel ? "请先准备基础模型权重" : "")} error={!hasDataset || !hasModel} />
+      <TrainingJobsPanel onRegistered={() => void client.invalidateQueries({ queryKey: ["admin", "models"] })} />
+      {showTraining ? <TrainingJobDialog catalog={catalog.data} pending={createTraining.isPending} error={createTraining.isError ? errorMessage(createTraining.error, "创建训练任务失败") : ""} onClose={() => setShowTraining(false)} onSubmit={(value) => createTraining.mutate(value)} /> : null}
+    </> : null}
   </section>;
 }
