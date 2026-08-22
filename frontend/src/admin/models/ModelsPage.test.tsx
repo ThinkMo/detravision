@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelsPage } from "./ModelsPage";
 import { trainingPollingInterval } from "./TrainingJobsPanel";
+import { trainingErrorMessage } from "./trainingApi";
 
 const json = (value: unknown, status = 200) => Response.json(value, { status });
 
@@ -25,6 +26,12 @@ afterEach(() => {
 });
 
 describe("model training console", () => {
+  it("maps stable training failures to Chinese guidance", () => {
+    expect(trainingErrorMessage("weights_unavailable")).toContain("基础模型");
+    expect(trainingErrorMessage("dataset_invalid")).toContain("训练集");
+    expect(trainingErrorMessage("cuda_oom")).toContain("显存");
+    expect(trainingErrorMessage("unknown_code")).toContain("训练失败");
+  });
   it("uses the catalog for all ten models, disables remote, and defaults to YOLO11m at 640", async () => {
     let createBody: Record<string, unknown> | null = null;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

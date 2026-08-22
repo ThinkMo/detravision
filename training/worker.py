@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sys
+import re
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -20,6 +21,30 @@ from training.contracts import (
     meets_acceptance,
 )
 from training.train import PROJECT_ROOT, configure_runtime, resolve_device
+
+
+_SAFE_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
+_DIAGNOSTIC_STAGES = frozenset({"setup", "load", "train", "evaluate", "result"})
+
+
+def _append_safe_diagnostic(
+    run_dir: Path,
+    *,
+    stage: str,
+    code: str,
+    exception_type: str | None = None,
+) -> None:
+    if stage not in _DIAGNOSTIC_STAGES or code not in ERROR_MESSAGES:
+        return
+    fields = [f"stage={stage}", f"code={code}"]
+    if exception_type and _SAFE_NAME.fullmatch(exception_type):
+        fields.append(f"exception={exception_type}")
+    line = ("training_diagnostic " + " ".join(fields) + "\n").encode("utf-8")[:256]
+    try:
+        with (run_dir / "training.log").open("ab") as stream:
+            stream.write(line)
+    except OSError:
+        pass
 
 
 @contextmanager
@@ -152,7 +177,7 @@ def _execute_manifest(
     model_cache_dir = Path(manifest.model_cache_dir).resolve()
     dataset_yaml = Path(manifest.dataset_yaml).resolve()
     if not dataset_yaml.is_file():
-        raise WorkerFailure("dataset_invalid")
+        raise WorkerFailure("dataset_invalid", "setup")
     model_cache_dir.mkdir(parents=True, exist_ok=True)
     configure_runtime(project_root)
 
@@ -181,7 +206,7 @@ def _execute_manifest(
                 )
             model = yolo_cls(model_reference)
         except Exception:
-            raise WorkerFailure("weights_unavailable")
+            raise WorkerFailure("weights_unavailable", "load")
 
         def on_train_epoch_end(trainer) -> None:
             progress = TrainingProgress(
@@ -219,7 +244,7 @@ def _execute_manifest(
                 code = "dataset_invalid"
             else:
                 code = "training_failed"
-            raise WorkerFailure(code) from exc
+            raise WorkerFailure(code, "train") from exc
 
         try:
             evaluation_model = yolo_cls(str(best_path))
@@ -239,7 +264,7 @@ def _execute_manifest(
             _copy_confusion_matrix(raw_metrics, run_dir)
         except Exception as exc:
             code = "cuda_oom" if _is_cuda_oom(exc) else "evaluation_failed"
-            raise WorkerFailure(code) from exc
+            raise WorkerFailure(code, "evaluate") from exc
 
         result = TrainingResult(
             status="completed",
@@ -253,9 +278,10 @@ def _execute_manifest(
 
 
 class WorkerFailure(Exception):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, stage: str) -> None:
         super().__init__(code)
         self.code = code
+        self.stage = stage
 
 
 def run_manifest(
@@ -282,8 +308,17 @@ def run_manifest(
         return 0
     except WorkerFailure as exc:
         code = exc.code
-    except Exception:
+        stage = exc.stage
+        exception_type = (
+            type(exc.__cause__).__name__ if exc.__cause__ is not None else None
+        )
+    except Exception as exc:
         code = "training_failed"
+        stage = "setup"
+        exception_type = type(exc).__name__
+    _append_safe_diagnostic(
+        run_dir, stage=stage, code=code, exception_type=exception_type
+    )
     try:
         _write_failure(run_dir, code)
     except Exception:

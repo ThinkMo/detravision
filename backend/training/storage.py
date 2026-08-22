@@ -33,6 +33,9 @@ _FILE_URI = re.compile(r"(?i)\bfile://[^\r\n\t\s]+")
 _SLASH_UNC_PATH = re.compile(
     r"(?<![\w:/])//[^\r\n\t\s/]+/[^\r\n\t\s]+"
 )
+_DIAGNOSTIC_STAGE = frozenset({"launch", "monitor", "result", "shutdown"})
+_DIAGNOSTIC_CODE = frozenset({"training_failed", "worker_exit", "interrupted"})
+_DIAGNOSTIC_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}\Z")
 
 
 class TrainingStorage:
@@ -86,6 +89,30 @@ class TrainingStorage:
         except KeyError as exc:
             raise ValueError("unsupported training artifact") from exc
         return self._contained(self.run_path(run_key) / relative_name)
+
+    def append_safe_diagnostic(
+        self,
+        run_key: str,
+        stage: str,
+        code: str,
+        *,
+        exception_type: str | None = None,
+        exit_code: int | None = None,
+    ) -> None:
+        if stage not in _DIAGNOSTIC_STAGE or code not in _DIAGNOSTIC_CODE:
+            return
+        fields = [f"stage={stage}", f"code={code}"]
+        if exception_type and _DIAGNOSTIC_NAME.fullmatch(exception_type):
+            fields.append(f"exception={exception_type}")
+        if type(exit_code) is int:
+            fields.append(f"exit_code={max(-999999, min(999999, exit_code))}")
+        line = ("training_diagnostic " + " ".join(fields) + "\n").encode("utf-8")[:256]
+        try:
+            path = self.resolve_artifact(run_key, "log")
+            with path.open("ab") as stream:
+                stream.write(line)
+        except (OSError, ValueError):
+            return
 
     def write_dataset_snapshot(self, run_key: str, dataset: dict[str, object]) -> Path:
         run_dir = self.run_path(run_key)

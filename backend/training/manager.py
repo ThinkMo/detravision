@@ -332,6 +332,11 @@ class LocalTrainingManager:
         )
 
     def _mark_invalid_result(self, job_id: int, run_key: str) -> bool:
+        active = self._active
+        exit_code = active.process.poll() if active is not None else None
+        self._storage.append_safe_diagnostic(
+            run_key, "result", "worker_exit", exit_code=exit_code
+        )
         return self._safe_mark_terminal(
             job_id, status="failed", has_last=self._artifact_exists(run_key, "last"),
             error_code="training_failed", error_message="Training did not produce a valid model.",

@@ -718,6 +718,23 @@ def test_worker_writes_only_stable_safe_failures(
     assert "\\" not in result_text
 
 
+def test_worker_appends_safe_structured_failure_diagnostic(tmp_path: Path):
+    manifest_path, payload = write_manifest(tmp_path)
+    FakeYOLO.fail_stage = "train"
+
+    assert main(
+        ["--manifest", str(manifest_path)],
+        yolo_cls=FakeYOLO,
+        cuda_available=lambda: False,
+        project_root=tmp_path,
+    ) == 1
+
+    log = (Path(str(payload["run_dir"])) / "training.log").read_text("utf-8")
+    assert "stage=train code=training_failed exception=RuntimeError" in log
+    assert "private" not in log.casefold()
+    assert str(tmp_path) not in log
+
+
 def test_worker_rejects_best_checkpoint_resolving_outside_run(tmp_path: Path):
     """Catches a symlinked checkpoint escaping the manager-owned run directory."""
     manifest_path, payload = write_manifest(tmp_path)

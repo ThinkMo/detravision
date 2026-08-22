@@ -6,7 +6,7 @@ import { ErrorPanel } from "../../components/ErrorPanel";
 import { LoadingPanel } from "../../components/LoadingPanel";
 import { AdminNotice, errorMessage } from "../shared";
 import { TrainingJobDetail, TrainingMetricsSummary } from "./TrainingJobDetail";
-import { trainingApi } from "./trainingApi";
+import { trainingApi, trainingErrorMessage } from "./trainingApi";
 
 const ACTIVE = new Set(["queued", "running", "evaluating", "stopping"]);
 const RESUMABLE = new Set(["stopped", "interrupted", "failed"]);
@@ -39,7 +39,7 @@ export function TrainingJobsPanel({ onRegistered }: { onRegistered: () => void }
         <header><div><strong>任务 #{job.id}</strong><span>{job.base_model} · {job.imgsz}</span></div><span className={`training-status training-status--${job.status}`}>{statusLabel[job.status]}</span></header>
         <div className="training-progress"><progress aria-label={`任务 ${job.id} 训练进度`} value={current} max={maximum} aria-valuemin={0} aria-valuemax={maximum} aria-valuenow={current} /><span>{job.current_epoch}/{job.total_epochs}（{progress}%）</span></div>
         <TrainingMetricsSummary job={job} />
-        {job.error_message ? <p className="training-error">{job.error_message}</p> : null}
+        {job.error_code || job.error_message ? <p className="training-error">{trainingErrorMessage(job.error_code, job.error_message)}</p> : null}
         <footer>
           <button type="button" className="table-action" onClick={() => setDetailId(job.id)}>查看详情</button>
           {ACTIVE.has(job.status) ? <button type="button" className="table-action table-action--danger" disabled={stop.isPending} aria-label={`停止任务 ${job.id}`} onClick={() => { resetActions(); stop.mutate(job.id); }}>停止</button> : null}
