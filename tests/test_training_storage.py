@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from backend.core.config import Settings
 from backend.training.storage import ARTIFACTS, TrainingStorage
@@ -51,6 +52,57 @@ def test_artifact_resolution_uses_only_the_fixed_allowlist(tmp_path: Path):
     ).resolve()
     with pytest.raises(ValueError):
         storage.resolve_artifact(run_key, "../../outside")
+
+
+def test_write_dataset_snapshot_creates_contained_atomic_yaml(tmp_path: Path):
+    storage = make_storage(tmp_path)
+    run_key = storage.create_run()
+    dataset_root = tmp_path / "authorized" / "site-a"
+    dataset_root.mkdir(parents=True)
+
+    result = storage.write_dataset_snapshot(
+        run_key,
+        {
+            "path": dataset_root,
+            "train": "images/train",
+            "val": "images/val",
+            "test": "images/test",
+            "classes": ["person", "helmet", "no_helmet"],
+        },
+    )
+
+    assert result == storage.run_path(run_key) / "dataset.yaml"
+    assert result.is_relative_to(storage.root)
+    assert yaml.safe_load(result.read_text("utf-8")) == {
+        "path": str(dataset_root),
+        "train": "images/train",
+        "val": "images/val",
+        "test": "images/test",
+        "names": {0: "person", 1: "helmet", 2: "no_helmet"},
+    }
+    assert not list(result.parent.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("split", ["../private", "C:/private", "/srv/private"])
+def test_write_dataset_snapshot_rejects_unsafe_split_paths(
+    tmp_path: Path, split: str
+):
+    storage = make_storage(tmp_path)
+    run_key = storage.create_run()
+    dataset_root = tmp_path / "authorized" / "site-a"
+    dataset_root.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="split"):
+        storage.write_dataset_snapshot(
+            run_key,
+            {
+                "path": dataset_root,
+                "train": split,
+                "val": "images/val",
+                "test": "images/test",
+                "classes": ["person", "helmet", "no_helmet"],
+            },
+        )
 
 
 @pytest.mark.parametrize(

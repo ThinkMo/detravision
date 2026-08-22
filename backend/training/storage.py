@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import re
 import secrets
+import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
+
+import yaml
 
 from backend.core.config import Settings
 
@@ -83,6 +86,51 @@ class TrainingStorage:
         except KeyError as exc:
             raise ValueError("unsupported training artifact") from exc
         return self._contained(self.run_path(run_key) / relative_name)
+
+    def write_dataset_snapshot(self, run_key: str, dataset: dict[str, object]) -> Path:
+        run_dir = self.run_path(run_key)
+        destination = self._contained(run_dir / "dataset.yaml")
+        temporary = self._contained(
+            run_dir / f".dataset-{secrets.token_hex(8)}.tmp"
+        )
+        classes = dataset.get("classes")
+        if not isinstance(classes, list) or not all(
+            isinstance(item, str) for item in classes
+        ):
+            raise ValueError("invalid dataset classes")
+        dataset_path = Path(dataset["path"]).resolve()
+        if not dataset_path.is_absolute() or not dataset_path.is_dir():
+            raise ValueError("invalid dataset path")
+        splits: dict[str, str] = {}
+        for key in ("train", "val", "test"):
+            value = dataset.get(key)
+            if not isinstance(value, str) or "\\" in value:
+                raise ValueError("invalid dataset split")
+            posix = PurePosixPath(value)
+            windows = PureWindowsPath(value)
+            if (
+                posix.is_absolute()
+                or windows.is_absolute()
+                or bool(windows.drive)
+                or any(part in {"", ".", ".."} for part in posix.parts)
+            ):
+                raise ValueError("invalid dataset split")
+            splits[key] = posix.as_posix()
+        payload = {
+            "path": str(dataset_path),
+            **splits,
+            "names": dict(enumerate(classes)),
+        }
+        try:
+            with temporary.open("x", encoding="utf-8", newline="\n") as stream:
+                yaml.safe_dump(payload, stream, allow_unicode=True, sort_keys=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+        return destination
 
     def tail_log(self, run_key: str, limit: int) -> str:
         if type(limit) is not int or limit < 1:
