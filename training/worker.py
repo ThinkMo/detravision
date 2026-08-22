@@ -70,6 +70,15 @@ def _batch(value: str) -> int:
     return -1 if value == "auto" else int(value)
 
 
+def _evaluation_batch(requested_batch: int, trainer: object) -> int:
+    if requested_batch > 0:
+        return requested_batch
+    actual_batch = getattr(trainer, "batch_size", 1)
+    if isinstance(actual_batch, bool) or not isinstance(actual_batch, int):
+        return 1
+    return max(actual_batch, 1)
+
+
 def _progress_metrics(raw_metrics: object) -> dict[str, float]:
     if not isinstance(raw_metrics, Mapping):
         return {}
@@ -252,7 +261,7 @@ def _execute_manifest(
                 data=manifest.dataset_yaml,
                 split="test",
                 imgsz=manifest.imgsz,
-                batch=batch,
+                batch=_evaluation_batch(batch, model.trainer),
                 device=device,
                 workers=0,
                 project=manifest.run_dir,

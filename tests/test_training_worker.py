@@ -404,7 +404,11 @@ class FakeYOLO:
         self.callbacks: dict[str, object] = {}
         self.train_calls: list[dict[str, object]] = []
         self.val_calls: list[dict[str, object]] = []
-        self.trainer = SimpleNamespace(epoch=0, metrics={"metrics/mAP50(B)": 0.25})
+        self.trainer = SimpleNamespace(
+            epoch=0,
+            metrics={"metrics/mAP50(B)": 0.25},
+            batch_size=6,
+        )
         self.__class__.instances.append(self)
 
     def add_callback(self, name: str, callback):
@@ -500,7 +504,7 @@ def test_worker_dispatches_training_progress_test_evaluation_and_digest(
             "data": payload["dataset_yaml"],
             "split": "test",
             "imgsz": 640,
-            "batch": -1,
+            "batch": 6,
             "device": 0,
             "workers": 0,
             "project": payload["run_dir"],
