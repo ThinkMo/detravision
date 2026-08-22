@@ -31,12 +31,35 @@ class Settings:
     reconcile_interval: float = float(os.getenv("RECONCILE_INTERVAL", "3"))
     enable_runtime: bool = _bool_env("ENABLE_RUNTIME", True)
     feishu_webhook: str | None = os.getenv("FEISHU_WEBHOOK")
+    training_enabled: bool = _bool_env("TRAINING_ENABLED", True)
+    training_dataset_yaml: Path = Path(
+        os.getenv(
+            "TRAINING_DATASET_YAML",
+            "training/configs/construction-ppe-helmet.yaml",
+        )
+    )
+    training_run_dir: Path = Path(
+        os.getenv("TRAINING_RUN_DIR", "data/training-runs")
+    )
+    training_model_cache_dir: Path = Path(
+        os.getenv("TRAINING_MODEL_CACHE_DIR", "data/training-models")
+    )
+    training_log_tail_bytes: int = int(
+        os.getenv("TRAINING_LOG_TAIL_BYTES", "65536")
+    )
+    training_stop_timeout_seconds: float = float(
+        os.getenv("TRAINING_STOP_TIMEOUT_SECONDS", "15")
+    )
 
     def __post_init__(self) -> None:
         if self.batch_retention_days < 1:
             raise ValueError("BATCH_RETENTION_DAYS must be positive")
         if self.batch_worker_count != 1:
             raise ValueError("BATCH_WORKER_COUNT must be 1 for this release")
+        if self.training_log_tail_bytes < 1:
+            raise ValueError("TRAINING_LOG_TAIL_BYTES must be positive")
+        if self.training_stop_timeout_seconds <= 0:
+            raise ValueError("TRAINING_STOP_TIMEOUT_SECONDS must be positive")
 
     @property
     def database_path(self) -> Path:
