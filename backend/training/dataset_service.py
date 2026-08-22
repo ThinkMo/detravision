@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
+import secrets
+import shutil
 from typing import Any
 
 from backend.core.config import Settings
@@ -10,6 +13,7 @@ from .dataset_repository import (
     TrainingDatasetConflictError,
     TrainingDatasetRepository,
 )
+from .dataset_filesystem import DatasetFilesystem, DatasetFilesystemError
 
 
 _ERROR_STATUS = {
@@ -19,6 +23,9 @@ _ERROR_STATUS = {
     "dataset_not_found": 404,
     "dataset_conflict": 409,
     "dataset_in_use": 409,
+    "dataset_published": 409,
+    "dataset_copy_failed": 503,
+    "dataset_scan_failed": 422,
 }
 _MAX_DIRECTORY_RESULTS = 200
 _MAX_CLASSES = 100
@@ -40,6 +47,7 @@ class DatasetService:
     ) -> None:
         self._roots = dict(settings.training_dataset_roots)
         self._repository = repository
+        self._filesystem = DatasetFilesystem(self._roots)
 
     def list_roots(self) -> list[dict[str, str]]:
         return [{"alias": alias} for alias in self._roots]
@@ -115,6 +123,115 @@ class DatasetService:
 
     def catalog(self) -> list[dict[str, Any]]:
         return [self._public(row) for row in self._repository.list()]
+
+    def clone_version(self, dataset_id: int, *, created_by: int) -> dict[str, Any]:
+        source = self._repository.get(dataset_id)
+        if source is None:
+            raise DatasetServiceError("dataset_not_found")
+        if source["status"] != "published":
+            raise DatasetServiceError("dataset_published")
+        root = self._root(source["root_alias"])
+        source_path = self._filesystem.dataset_path(source)
+        token = secrets.token_hex(16)
+        directory = f"dataset-{token}"
+        destination = self._contained(root, root / directory)
+        temporary = self._contained(root, root / f".dataset-copy-{token}")
+        editing: dict[str, Any] | None = None
+        try:
+            self._filesystem.clone(source_path, temporary)
+            os.replace(temporary, destination)
+            candidate = {**source, "directory": directory}
+            scanned = self._filesystem.scan(candidate)
+            editing = self._repository.create_editing_version(
+                dataset_id, {"directory": directory, "created_by": created_by}
+            )
+            self._repository.upsert_image_index(
+                editing["id"], [self._scan_values(item) for item in scanned]
+            )
+            return self._public(editing)
+        except (OSError, DatasetFilesystemError, TrainingDatasetConflictError) as exc:
+            if editing is not None:
+                try:
+                    self._repository.delete_editing_version(editing["id"])
+                except TrainingDatasetConflictError:
+                    pass
+            shutil.rmtree(temporary, ignore_errors=True)
+            shutil.rmtree(destination, ignore_errors=True)
+            raise DatasetServiceError("dataset_copy_failed") from exc
+
+    def rescan(self, dataset_id: int, split: str | None = None) -> dict[str, int]:
+        dataset = self._repository.get(dataset_id)
+        if dataset is None:
+            raise DatasetServiceError("dataset_not_found")
+        if dataset["status"] != "editing":
+            raise DatasetServiceError("dataset_published")
+        if split is not None and split not in {"train", "val", "test"}:
+            raise DatasetServiceError("dataset_invalid")
+        try:
+            scanned = self._filesystem.scan(dataset, split)
+        except DatasetFilesystemError as exc:
+            raise DatasetServiceError("dataset_scan_failed") from exc
+        splits = (split,) if split else ("train", "val", "test")
+        existing = {
+            (item["split"], item["image_key"]): item
+            for current in splits
+            for item in self._repository.list_images(
+                dataset_id, current, page=1, page_size=1_000_000
+            )["items"]
+        }
+        found = {(item.split, item.image_key): item for item in scanned}
+        discovered = [
+            item for key, item in found.items() if key not in existing
+        ]
+        if discovered:
+            self._repository.upsert_image_index(
+                dataset_id, [self._scan_values(item) for item in discovered]
+            )
+        changed = 0
+        missing = 0
+        for key, current in existing.items():
+            observed = found.get(key)
+            code: str | None = None
+            if observed is None:
+                code = "file_missing"
+                missing += 1
+            elif (
+                observed.content_digest != current["content_digest"]
+                or observed.width != current["width"]
+                or observed.height != current["height"]
+            ):
+                code = "file_changed"
+                changed += 1
+            if code != current["validation_code"]:
+                self._repository.update_image_review(
+                    current["id"], current["revision"], {"validation_code": code}
+                )
+        return {
+            "discovered": len(discovered), "changed": changed, "missing": missing,
+            "total": len(found),
+        }
+
+    def list_images(
+        self, dataset_id: int, *, split: str, status: str | None = None,
+        page: int = 1, page_size: int = 50,
+    ) -> dict[str, Any]:
+        if split not in {"train", "val", "test"}:
+            raise DatasetServiceError("dataset_invalid")
+        if self._repository.get(dataset_id) is None:
+            raise DatasetServiceError("dataset_not_found")
+        return self._repository.list_images(dataset_id, split, status, page, page_size)
+
+    @staticmethod
+    def _scan_values(item) -> dict[str, object]:
+        return {
+            "split": item.split,
+            "image_key": item.image_key,
+            "display_name": item.display_name,
+            "width": item.width,
+            "height": item.height,
+            "review_status": "pending_annotation",
+            "content_digest": item.content_digest,
+        }
 
     def resolve(self, key: str) -> dict[str, Any]:
         if not isinstance(key, str) or not key.startswith("dataset:"):
@@ -236,7 +353,7 @@ class DatasetService:
         }
 
     def _public(self, row: Mapping[str, Any]) -> dict[str, Any]:
-        available = bool(row["enabled"])
+        available = bool(row["enabled"]) and row.get("status", "published") == "published"
         reason: str | None = None if available else "dataset_disabled"
         if available:
             try:
@@ -257,4 +374,11 @@ class DatasetService:
             "enabled": bool(row["enabled"]),
             "available": available,
             "reason": reason,
+            "version": row.get("version", 1),
+            "status": row.get("status", "published"),
+            "parent_id": row.get("parent_id"),
+            "root_dataset_id": row.get("root_dataset_id"),
+            "revision": row.get("revision", 0),
+            "published_at": row.get("published_at"),
+            "manifest_digest": row.get("manifest_digest"),
         }

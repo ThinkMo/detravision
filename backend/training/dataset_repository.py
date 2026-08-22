@@ -248,6 +248,16 @@ class TrainingDatasetRepository:
                 raise TrainingDatasetConflictError("annotation image missing")
             return _image_dict(row)
 
+    def delete_editing_version(self, dataset_id: int) -> bool:
+        with self._session_factory.begin() as session:
+            row = session.get(TrainingDataset, dataset_id)
+            if row is None:
+                return False
+            if row.status != "editing":
+                raise TrainingDatasetConflictError("published dataset cannot be deleted")
+            session.delete(row)
+            return True
+
     def update(
         self, dataset_id: int, values: Mapping[str, object]
     ) -> dict[str, Any] | None:
