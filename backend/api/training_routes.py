@@ -11,11 +11,19 @@ from backend.audit import audit_service, audited_admin, request_ip
 from backend.auth import AuthenticatedUser
 from backend.auth.dependencies import require_same_origin
 from backend.schemas import (
+    AnnotationSaveRequest,
+    DatasetClassCreateRequest,
+    DatasetClassRenameRequest,
+    DatasetPublishRequest,
+    DatasetRescanRequest,
+    RevisionRequest,
     TrainingDatasetCreate,
     TrainingDatasetUpdate,
     TrainingJobCreate,
     TrainingModelRegister,
 )
+from backend.training.annotation_service import AnnotationService, AnnotationServiceError
+from backend.training.dataset_validation import DatasetValidationError, DatasetValidator
 from backend.training.catalog import TrainingRequest, training_catalog
 from backend.training.dataset_service import DatasetService, DatasetServiceError
 from backend.training.service import TrainingService, TrainingServiceError
@@ -72,6 +80,14 @@ def _storage(request: Request) -> TrainingStorage:
 
 def _dataset_service(request: Request) -> DatasetService:
     return request.app.state.training_dataset_service
+
+
+def _annotation_service(request: Request) -> AnnotationService:
+    return request.app.state.annotation_service
+
+
+def _validator(request: Request) -> DatasetValidator:
+    return request.app.state.dataset_validator
 
 
 def _error(error: TrainingServiceError) -> JSONResponse:
@@ -146,6 +162,23 @@ def _dataset_error(error: DatasetServiceError) -> JSONResponse:
     return JSONResponse(
         status_code=error.status_code,
         content={"code": error.code, "message": "The training dataset request failed."},
+    )
+
+
+def _annotation_error(error: Exception) -> JSONResponse:
+    code = getattr(error, "code", "dataset_invalid")
+    statuses = {
+        "dataset_not_found": 404, "annotation_not_found": 404,
+        "dataset_published": 409, "annotation_conflict": 409,
+        "class_in_use": 409, "class_order_locked": 409,
+        "dataset_conflict": 409, "dataset_validation_failed": 409,
+        "dataset_warnings_unconfirmed": 409,
+        "annotation_invalid": 422, "class_invalid": 422,
+        "annotation_write_failed": 503,
+    }
+    return JSONResponse(
+        status_code=statuses.get(code, 422),
+        content={"code": code, "message": "The dataset annotation request failed."},
     )
 
 
@@ -232,6 +265,169 @@ def disable_training_dataset(
         return _dataset_error(exc)
     _record(request, user, "training_dataset_disable", dataset_id, "success", resource="training_dataset")
     return None
+
+
+@router.post(
+    "/training/datasets/{dataset_id}/versions",
+    status_code=status.HTTP_201_CREATED,
+)
+def clone_training_dataset_version(
+    dataset_id: int, request: Request,
+    user: AuthenticatedUser = Depends(audited_admin("dataset_clone", "training_dataset")),
+):
+    try:
+        item = _dataset_service(request).clone_version(dataset_id, created_by=user.id)
+    except DatasetServiceError as exc:
+        _record(request, user, "dataset_clone", dataset_id, "rejected", details={"code": exc.code}, resource="training_dataset")
+        return _dataset_error(exc)
+    _record(request, user, "dataset_clone", item["id"], "success", resource="training_dataset")
+    return item
+
+
+@router.get("/training/datasets/{dataset_id}/versions")
+def list_training_dataset_versions(
+    dataset_id: int, request: Request,
+    _user: AuthenticatedUser = Depends(audited_admin("read", "training_dataset")),
+):
+    try:
+        return {"items": _dataset_service(request).list_versions(dataset_id)}
+    except DatasetServiceError as exc:
+        return _dataset_error(exc)
+
+
+@router.post("/training/datasets/{dataset_id}/rescan")
+def rescan_training_dataset(
+    dataset_id: int, payload: DatasetRescanRequest, request: Request,
+    user: AuthenticatedUser = Depends(audited_admin("dataset_rescan", "training_dataset")),
+):
+    try:
+        result = _dataset_service(request).rescan(dataset_id, payload.split)
+    except DatasetServiceError as exc:
+        _record(request, user, "dataset_rescan", dataset_id, "rejected", details={"code": exc.code}, resource="training_dataset")
+        return _dataset_error(exc)
+    _record(request, user, "dataset_rescan", dataset_id, "success", resource="training_dataset")
+    return result
+
+
+@router.get("/training/datasets/{dataset_id}/images")
+def list_training_dataset_images(
+    dataset_id: int, request: Request,
+    split: str = Query(pattern="^(train|val|test)$"),
+    review_status: str | None = Query(default=None, alias="status"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    _user: AuthenticatedUser = Depends(audited_admin("read", "training_dataset_image")),
+):
+    try:
+        return _dataset_service(request).list_images(
+            dataset_id, split=split, status=review_status, page=page, page_size=page_size
+        )
+    except DatasetServiceError as exc:
+        return _dataset_error(exc)
+
+
+@router.get("/training/datasets/{dataset_id}/images/{image_id}")
+def get_training_dataset_image(
+    dataset_id: int, image_id: int, request: Request,
+    _user: AuthenticatedUser = Depends(audited_admin("read", "training_dataset_image")),
+):
+    try:
+        return _annotation_service(request).get_image(dataset_id, image_id)
+    except AnnotationServiceError as exc:
+        return _annotation_error(exc)
+
+
+@router.get("/training/datasets/{dataset_id}/images/{image_id}/content")
+def get_training_dataset_image_content(
+    dataset_id: int, image_id: int, request: Request,
+    _user: AuthenticatedUser = Depends(audited_admin("read", "training_dataset_image")),
+):
+    try:
+        path, media_type = _annotation_service(request).content(dataset_id, image_id)
+    except AnnotationServiceError as exc:
+        return _annotation_error(exc)
+    return FileResponse(
+        path, media_type=media_type,
+        headers={
+            "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+def _annotation_mutation(request, user, action, dataset_id, callback):
+    try:
+        result = callback()
+    except (AnnotationServiceError, DatasetValidationError) as exc:
+        _record(request, user, action, dataset_id, "rejected", details={"code": exc.code}, resource="training_dataset")
+        return _annotation_error(exc)
+    _record(request, user, action, dataset_id, "success", resource="training_dataset")
+    return result
+
+
+@router.put("/training/datasets/{dataset_id}/images/{image_id}/annotations")
+def save_training_dataset_annotations(
+    dataset_id: int, image_id: int, payload: AnnotationSaveRequest, request: Request,
+    user: AuthenticatedUser = Depends(audited_admin("annotation_save", "training_dataset_image")),
+):
+    return _annotation_mutation(
+        request, user, "annotation_save", dataset_id,
+        lambda: _annotation_service(request).save(
+            dataset_id, image_id, payload.revision,
+            [box.model_dump() for box in payload.boxes],
+        ),
+    )
+
+
+@router.post("/training/datasets/{dataset_id}/images/{image_id}/confirm-empty")
+def confirm_training_dataset_image_empty(
+    dataset_id: int, image_id: int, payload: RevisionRequest, request: Request,
+    user: AuthenticatedUser = Depends(audited_admin("annotation_confirm_empty", "training_dataset_image")),
+):
+    return _annotation_mutation(
+        request, user, "annotation_confirm_empty", dataset_id,
+        lambda: _annotation_service(request).confirm_empty(dataset_id, image_id, payload.revision),
+    )
+
+
+@router.post("/training/datasets/{dataset_id}/classes")
+def add_training_dataset_class(
+    dataset_id: int, payload: DatasetClassCreateRequest, request: Request,
+    user: AuthenticatedUser = Depends(audited_admin("dataset_class_add", "training_dataset")),
+):
+    return _annotation_mutation(request, user, "dataset_class_add", dataset_id, lambda: _annotation_service(request).add_class(dataset_id, payload.revision, payload.name))
+
+
+@router.patch("/training/datasets/{dataset_id}/classes/{class_id}")
+def rename_training_dataset_class(
+    dataset_id: int, class_id: int, payload: DatasetClassRenameRequest, request: Request,
+    user: AuthenticatedUser = Depends(audited_admin("dataset_class_rename", "training_dataset")),
+):
+    return _annotation_mutation(request, user, "dataset_class_rename", dataset_id, lambda: _annotation_service(request).rename_class(dataset_id, payload.revision, class_id, payload.name))
+
+
+@router.delete("/training/datasets/{dataset_id}/classes/{class_id}")
+def delete_training_dataset_class(
+    dataset_id: int, class_id: int, payload: RevisionRequest, request: Request,
+    user: AuthenticatedUser = Depends(audited_admin("dataset_class_delete", "training_dataset")),
+):
+    return _annotation_mutation(request, user, "dataset_class_delete", dataset_id, lambda: _annotation_service(request).delete_class(dataset_id, payload.revision, class_id))
+
+
+@router.post("/training/datasets/{dataset_id}/validate")
+def validate_training_dataset(
+    dataset_id: int, request: Request,
+    user: AuthenticatedUser = Depends(audited_admin("dataset_validate", "training_dataset")),
+):
+    return _annotation_mutation(request, user, "dataset_validate", dataset_id, lambda: _validator(request).validate(dataset_id).to_json())
+
+
+@router.post("/training/datasets/{dataset_id}/publish")
+def publish_training_dataset(
+    dataset_id: int, payload: DatasetPublishRequest, request: Request,
+    user: AuthenticatedUser = Depends(audited_admin("dataset_publish", "training_dataset")),
+):
+    return _annotation_mutation(request, user, "dataset_publish", dataset_id, lambda: _validator(request).publish(dataset_id, payload.revision, payload.confirm_warnings))
 
 
 @router.get("/training-jobs")

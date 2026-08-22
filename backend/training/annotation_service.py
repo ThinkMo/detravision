@@ -6,6 +6,7 @@ from numbers import Real
 import os
 from pathlib import Path
 import secrets
+import hashlib
 from typing import Any, Mapping, Sequence
 
 from .dataset_filesystem import DatasetFilesystem, DatasetFilesystemError
@@ -36,6 +37,28 @@ class AnnotationService:
         dataset, image = self._records(dataset_id, image_id)
         label = self._filesystem.resolve_label(dataset, image["split"], image["image_key"])
         return {**image, "boxes": [box.__dict__ for box in self._read(label, len(dataset["classes"]))]}
+
+    def content(self, dataset_id: int, image_id: int) -> tuple[Path, str]:
+        dataset, image = self._records(dataset_id, image_id)
+        path = self._filesystem.resolve_image(dataset, image["split"], image["image_key"])
+        try:
+            checksum = hashlib.sha256()
+            with path.open("rb") as stream:
+                while chunk := stream.read(1024 * 1024):
+                    checksum.update(chunk)
+            digest = checksum.hexdigest()
+        except OSError as exc:
+            raise AnnotationServiceError("annotation_not_found") from exc
+        if digest != image["content_digest"]:
+            raise AnnotationServiceError("annotation_conflict")
+        media_types = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+            ".bmp": "image/bmp", ".webp": "image/webp",
+        }
+        try:
+            return path, media_types[path.suffix.casefold()]
+        except KeyError as exc:
+            raise AnnotationServiceError("annotation_invalid") from exc
 
     def save(
         self, dataset_id: int, image_id: int, revision: int,

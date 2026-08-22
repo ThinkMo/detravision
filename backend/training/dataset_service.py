@@ -211,6 +211,13 @@ class DatasetService:
             "total": len(found),
         }
 
+    def list_versions(self, dataset_id: int) -> list[dict[str, Any]]:
+        dataset = self._repository.get(dataset_id)
+        if dataset is None:
+            raise DatasetServiceError("dataset_not_found")
+        root_id = dataset.get("root_dataset_id") or dataset["id"]
+        return [self._public(row) for row in self._repository.list_versions(int(root_id))]
+
     def list_images(
         self, dataset_id: int, *, split: str, status: str | None = None,
         page: int = 1, page_size: int = 50,

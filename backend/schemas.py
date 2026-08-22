@@ -179,3 +179,40 @@ class TrainingDatasetUpdate(BaseModel):
     test_split: str | None = Field(default=None, min_length=1, max_length=512)
     classes: list[str] | None = Field(default=None, min_length=1, max_length=100)
     enabled: bool | None = None
+
+
+class DatasetRescanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    split: Literal["train", "val", "test"] | None = None
+
+
+class AnnotationBoxRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    class_id: int = Field(ge=0)
+    x_center: float = Field(ge=0, le=1)
+    y_center: float = Field(ge=0, le=1)
+    width: float = Field(gt=0, le=1)
+    height: float = Field(gt=0, le=1)
+
+
+class AnnotationSaveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=0)
+    boxes: list[AnnotationBoxRequest] = Field(min_length=1, max_length=1000)
+
+
+class RevisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=0)
+
+
+class DatasetClassCreateRequest(RevisionRequest):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class DatasetClassRenameRequest(RevisionRequest):
+    name: str = Field(min_length=1, max_length=100)
+
+
+class DatasetPublishRequest(RevisionRequest):
+    confirm_warnings: bool = False

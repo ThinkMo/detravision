@@ -35,6 +35,9 @@ from backend.storage import LocalFileStorage
 from backend.training import LocalTrainingManager, TrainingRepository, TrainingService
 from backend.training.dataset_repository import TrainingDatasetRepository
 from backend.training.dataset_service import DatasetService
+from backend.training.dataset_filesystem import DatasetFilesystem
+from backend.training.annotation_service import AnnotationService
+from backend.training.dataset_validation import DatasetValidator
 from backend.training.storage import TrainingStorage
 from backend.web import mount_frontend
 from backend.ws import EventHub
@@ -87,8 +90,15 @@ def application_lifespan(app_settings: Settings):
         )
         training_repository = TrainingRepository(session_factory)
         training_dataset_repository = TrainingDatasetRepository(session_factory)
+        dataset_filesystem = DatasetFilesystem(dict(app_settings.training_dataset_roots))
         training_dataset_service = DatasetService(
             app_settings, training_dataset_repository
+        )
+        annotation_service = AnnotationService(
+            training_dataset_repository, dataset_filesystem
+        )
+        dataset_validator = DatasetValidator(
+            training_dataset_repository, dataset_filesystem
         )
         training_storage = TrainingStorage(app_settings)
         training_manager = LocalTrainingManager(
@@ -124,6 +134,8 @@ def application_lifespan(app_settings: Settings):
         app.state.training_manager = training_manager
         app.state.training_service = training_service
         app.state.training_dataset_service = training_dataset_service
+        app.state.annotation_service = annotation_service
+        app.state.dataset_validator = dataset_validator
         runtime_started = False
         try:
             await runtime.start()
