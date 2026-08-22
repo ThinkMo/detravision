@@ -254,6 +254,8 @@ TRAINING_DATASET_ROOTS=construction=D:\datasets\construction;customer=D:\dataset
 
 从原始 Construction-PPE ZIP 构建三类训练集、执行冒烟训练、正式训练、续训和验证的完整步骤见 [训练集构建与模型训练指南](docs/training-guide.md)。
 
+在管理控制台中复制已发布版本、扫描新增无标签图片、鼠标框选人工标注、校验并发布新训练/测评集的操作见 [训练集版本与人工标注指南](docs/dataset-annotation-guide.md)。
+
 类别定义：
 
 ```yaml

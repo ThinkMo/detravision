@@ -6,6 +6,7 @@ README 和使用指南面向项目使用者；`superpowers/specs/` 与 `superpow
 
 - [项目说明、安装与运行](../README.md)
 - [训练集构建与模型训练](training-guide.md)
+- [训练集版本与人工标注](dataset-annotation-guide.md)
 
 ## 设计规格
 
