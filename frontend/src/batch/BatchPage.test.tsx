@@ -44,8 +44,7 @@ const processingJob: BatchJobDetail = {
       preview_url: "/api/batch-jobs/12/images/31/preview",
       detections: [
         { label: "no_helmet", confidence: 0.91, bbox: [1, 2, 30, 40] },
-        { label: "person", confidence: 0.88, bbox: [0, 0, 50, 90] },
-        { label: "helmet", confidence: 0.76, bbox: [50, 5, 70, 25] },
+        { label: "helmet_worn", confidence: 0.76, bbox: [50, 5, 70, 90] },
       ],
       result_url: "/api/batch-jobs/12/images/31/download",
       created_at: "2026-08-16T00:00:00Z",
@@ -303,10 +302,10 @@ it("renders canonical previews with violation-first result details and authentic
     "/api/batch-jobs/12/images/31/preview",
   );
   const violation = within(card).getByText("未佩戴安全帽：1 人");
-  const contextualDetection = within(card).getByText("person");
+  const contextualDetection = within(card).getByText("已佩戴安全帽");
   expect(violation.compareDocumentPosition(contextualDetection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(within(card).getByText("no_helmet").closest("li")).toHaveTextContent("91%");
-  expect(within(card).getByText("helmet").closest("li")).toHaveTextContent("76%");
+  expect(within(card).getByText("未佩戴安全帽").closest("li")).toHaveTextContent("91%");
+  expect(within(card).getByText("已佩戴安全帽").closest("li")).toHaveTextContent("76%");
   expect(within(card).getByRole("link", { name: "下载 north-gate.jpg 标注图" })).toHaveAttribute(
     "href",
     "/api/batch-jobs/12/images/31/download",

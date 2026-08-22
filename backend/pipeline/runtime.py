@@ -15,6 +15,7 @@ from backend.batch.annotate import annotate
 from backend.db import Repository
 from backend.engine import Detection, DetectorProvider, build_detector
 from backend.rules import RuleEngine
+from backend.safety import compliance_display_detections
 from backend.stream.capture import CaptureWorker
 from backend.stream.frame_queue import DropOldestQueue, Frame
 from backend.ws import EventHub
@@ -185,7 +186,8 @@ class RuntimeManager:
         try:
             import cv2
 
-            rendered = annotate(frame.image, detections)
+            displayed_detections = compliance_display_detections(detections)
+            rendered = annotate(frame.image, displayed_detections)
             ok, encoded = cv2.imencode(
                 ".jpg", rendered, [int(cv2.IMWRITE_JPEG_QUALITY), 75]
             )

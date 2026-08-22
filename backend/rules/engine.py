@@ -5,6 +5,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 
 from backend.engine import Detection
+from backend.safety import assess_helmet_compliance
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,12 +32,6 @@ def center_in_polygon(bbox: tuple[float, float, float, float], polygon: list[lis
     return inside
 
 
-def center_inside(inner: Detection, outer_bbox: tuple[float, float, float, float]) -> bool:
-    x = (inner.bbox[0] + inner.bbox[2]) / 2
-    y = (inner.bbox[1] + inner.bbox[3]) / 2
-    return outer_bbox[0] <= x <= outer_bbox[2] and outer_bbox[1] <= y <= outer_bbox[3]
-
-
 class RuleEngine:
     def __init__(self, required_hits: int = 3, window_seconds: float = 5, cooldown_seconds: float = 30):
         self.required_hits = required_hits
@@ -52,15 +47,11 @@ class RuleEngine:
             for d in detections
             if d.label in {"fire", "smoke"}
         ]
-        persons = [d for d in detections if d.label == "person"]
-        unsafe_heads = [d for d in detections if d.label == "no_helmet"]
-        for person in persons:
-            x1, y1, x2, y2 = person.bbox
-            head_region = (x1, y1, x2, y1 + (y2 - y1) * 0.4)
-            matches = [head for head in unsafe_heads if center_inside(head, head_region)]
-            if matches:
-                best = max(matches, key=lambda detection: detection.confidence)
-                candidates.append(SemanticEvent("no_helmet", best.confidence, person.bbox))
+        candidates.extend(
+            SemanticEvent(item.label, item.confidence, item.bbox)
+            for item in assess_helmet_compliance(detections)
+            if item.label == "no_helmet"
+        )
         return candidates
 
     def evaluate(

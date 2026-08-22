@@ -4,6 +4,15 @@ import type { BatchImageResult } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { safePreviewUrl, safeResultUrl } from "./batchApi";
 
+const detectionLabels: Record<string, string> = {
+  helmet_worn: "已佩戴安全帽",
+  no_helmet: "未佩戴安全帽",
+};
+
+function detectionLabel(label: string) {
+  return detectionLabels[label] ?? label;
+}
+
 export function ResultCard({ jobId, image }: { jobId: number; image: BatchImageResult }) {
   const [previewFailed, setPreviewFailed] = useState(false);
   const [previewRetryKey, setPreviewRetryKey] = useState(0);
@@ -23,8 +32,8 @@ export function ResultCard({ jobId, image }: { jobId: number; image: BatchImageR
         {image.status === "failed" ? <p className="batch-result__error" role="alert">{image.error_message ?? "图片识别失败"}</p> : null}
         {image.status === "completed" ? <>
           <p className="batch-result__violation-summary">未佩戴安全帽：{violations.length} 人</p>
-          {violations.length ? <ul className="batch-detections batch-detections--violation" aria-label="未佩戴安全帽检测结果">{violations.map((detection, index) => <li key={`${detection.label}-${index}`}><span>{detection.label}</span><strong>{Math.round(detection.confidence * 100)}%</strong></li>)}</ul> : null}
-          {context.length ? <ul className="batch-detections batch-detections--context" aria-label="其他识别对象">{context.map((detection, index) => <li key={`${detection.label}-${index}`}><span>{detection.label}</span><strong>{Math.round(detection.confidence * 100)}%</strong></li>)}</ul> : null}
+          {violations.length ? <ul className="batch-detections batch-detections--violation" aria-label="未佩戴安全帽检测结果">{violations.map((detection, index) => <li key={`${detection.label}-${index}`}><span>{detectionLabel(detection.label)}</span><strong>{Math.round(detection.confidence * 100)}%</strong></li>)}</ul> : null}
+          {context.length ? <ul className="batch-detections batch-detections--context" aria-label="其他识别对象">{context.map((detection, index) => <li key={`${detection.label}-${index}`}><span>{detectionLabel(detection.label)}</span><strong>{Math.round(detection.confidence * 100)}%</strong></li>)}</ul> : null}
           {!image.detections.length ? <p className="batch-result__empty">未检测到目标</p> : null}
         </> : null}
         {resultUrl ? <a className="batch-download" href={resultUrl} download><Download aria-hidden="true" size={16} />下载 {image.display_name} 标注图</a> : null}

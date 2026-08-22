@@ -184,9 +184,15 @@ def _run_real_model_smoke(
                 {"label", "confidence", "bbox"}.issubset(detection)
                 for detection in detections
             )
-            assert any(
-                detection["label"] in {"person", "helmet"}
+            assert all(
+                detection["label"] in {"helmet_worn", "no_helmet"}
                 for detection in detections
+            )
+            assert any(
+                detection["label"] == "helmet_worn" for detection in detections
+            )
+            assert any(
+                detection["label"] == "no_helmet" for detection in detections
             )
             no_helmet_count = sum(
                 detection["label"] == "no_helmet" for detection in detections

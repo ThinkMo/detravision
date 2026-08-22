@@ -19,8 +19,14 @@ class AnnotationStyle:
 
 _STYLES = {
     "no_helmet": AnnotationStyle((220, 38, 38), 4),
+    "helmet_worn": AnnotationStyle((76, 138, 102), 4),
     "person": AnnotationStyle((86, 112, 138), 2),
     "helmet": AnnotationStyle((76, 138, 102), 2),
+}
+
+_DISPLAY_LABELS = {
+    "no_helmet": "未佩戴安全帽",
+    "helmet_worn": "已佩戴安全帽",
 }
 
 
@@ -58,7 +64,7 @@ def annotate(image: np.ndarray, detections: list[Detection]) -> np.ndarray:
         draw.rectangle(
             (left, top, right, bottom), outline=style.color, width=style.width
         )
-        label = f"{detection.label} {detection.confidence:.2f}"
+        label = f"{_DISPLAY_LABELS.get(detection.label, detection.label)} {detection.confidence:.2f}"
         label_box = draw.textbbox((0, 0), label, font=font)
         label_width = label_box[2] - label_box[0] + 4
         label_height = label_box[3] - label_box[1] + 4

@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from backend.engine import Detection, DetectorProvider
+from backend.safety import compliance_display_detections
 from backend.storage import FileStorage
 
 from .annotate import annotate
@@ -105,7 +106,10 @@ class BatchWorker:
                 return
 
             try:
-                rendered = annotate(image, prediction.detections)
+                displayed_detections = compliance_display_detections(
+                    prediction.detections
+                )
+                rendered = annotate(image, displayed_detections)
                 encoded_ok, output = cv2.imencode(
                     ".jpg",
                     rendered,
@@ -128,7 +132,7 @@ class BatchWorker:
             result = CompletedImage(
                 annotated_key=annotated_key,
                 model_version_id=prediction.model_version_id,
-                detections=[self._detection_dict(item) for item in prediction.detections],
+                detections=[self._detection_dict(item) for item in displayed_detections],
             )
             try:
                 self._repository.complete_image(claimed.id, result)

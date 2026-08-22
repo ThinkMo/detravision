@@ -30,7 +30,16 @@ NOW = datetime(2030, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 class FakeDetector:
     def predict(self, image: np.ndarray) -> list[Detection]:
         height, width = image.shape[:2]
-        return [Detection("helmet", 0.916, (-2, -1, width + 3, height + 4))]
+        return [
+            Detection("person", 0.88, (0, 0, width - 1, height - 1)),
+            Detection("helmet", 0.916, (20, 0, 40, 15)),
+        ]
+
+
+class PersonOnlyDetector:
+    def predict(self, image: np.ndarray) -> list[Detection]:
+        height, width = image.shape[:2]
+        return [Detection("person", 0.87, (0, 0, width - 1, height - 1))]
 
 
 class BlockingFakeDetector(FakeDetector):
@@ -124,7 +133,7 @@ def test_worker_records_model_version_detections_and_jpeg_annotation(batch_conte
     image = repository.list_images(job.id)[0]
     assert image.model_version_id == 8
     assert image.detections == [
-        {"label": "helmet", "confidence": 0.916, "bbox": [-2, -1, 63, 44]}
+        {"label": "helmet_worn", "confidence": 0.916, "bbox": [0, 0, 59, 39]}
     ]
     assert image.annotated_key is not None
     with storage.open(image.annotated_key) as stream:
@@ -170,7 +179,7 @@ def test_annotation_prioritizes_helmet_violation_with_explicit_styles():
     detections = [
         Detection("no_helmet", 0.95, (4, 20, 20, 38)),
         Detection("person", 0.80, (28, 20, 44, 38)),
-        Detection("helmet", 0.88, (52, 20, 68, 38)),
+        Detection("helmet_worn", 0.88, (52, 20, 68, 38)),
     ]
 
     annotated = annotate(image, detections)
@@ -181,7 +190,35 @@ def test_annotation_prioritizes_helmet_violation_with_explicit_styles():
     assert tuple(annotated[24, 28]) == (138, 112, 86)
     assert tuple(annotated[24, 30]) == (255, 255, 255)
     assert tuple(annotated[24, 52]) == (102, 138, 76)
-    assert tuple(annotated[24, 54]) == (255, 255, 255)
+    assert tuple(annotated[24, 54]) == (102, 138, 76)
+
+
+def test_worker_marks_detected_person_without_helmet_as_violation(batch_context):
+    repository, storage, original_worker, owner_id = batch_context
+    original_worker.stop()
+    worker = BatchWorker(
+        repository,
+        DetectorProvider(PersonOnlyDetector(), model_version_id=8),
+        storage,
+        poll_interval=0.01,
+    )
+    job = _create_job(repository, storage, owner_id, [_jpeg_bytes()])
+
+    assert worker.process_available() == 1
+
+    result = repository.list_images(job.id)[0]
+    assert result.detections == [
+        {"label": "no_helmet", "confidence": 0.87, "bbox": [0, 0, 59, 39]}
+    ]
+    assert result.annotated_key is not None
+    with storage.open(result.annotated_key) as stream:
+        encoded = np.frombuffer(stream.read(), dtype=np.uint8)
+    annotated = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    assert annotated is not None
+    blue, green, red = (int(value) for value in annotated[20, 0])
+    assert red > 200
+    assert blue < 80
+    assert green < 80
 
 
 def test_app_startup_recovery_uses_database_active_model_before_batch_claim(
