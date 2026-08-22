@@ -226,6 +226,20 @@ class BatchService:
         images = self._repository.list_images(job_id, user_id=owner_id)
         return job, images
 
+    def delete_job(self, user: AuthenticatedUser, job_id: int) -> None:
+        result = self._repository.delete_job(
+            job_id,
+            user_id=user.id,
+            is_admin=user.role == "admin",
+            delete_key=self._storage.delete,
+        )
+        if result.status == "missing":
+            raise BatchServiceError(404, "job_not_found", "batch job was not found")
+        if result.status == "busy":
+            raise BatchServiceError(409, "job_active", "active batch jobs cannot be deleted")
+        if result.status != "deleted":
+            raise BatchServiceError(503, "cleanup_failed", "batch job cleanup failed")
+
     def open_result(
         self,
         user: AuthenticatedUser,

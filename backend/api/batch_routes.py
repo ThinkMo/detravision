@@ -257,6 +257,27 @@ def get_batch_job(
     return detail_response(job, images)
 
 
+@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_batch_job(
+    job_id: int,
+    request: Request,
+    user: AuthenticatedUser = Depends(current_user),
+):
+    try:
+        batch_service(request).delete_job(user, job_id)
+    except BatchServiceError as exc:
+        audit_service(request).record(
+            user.id, "batch_job_delete", "batch_job", job_id, "rejected",
+            request_ip(request), details={"code": exc.code},
+        )
+        return error_response(exc)
+    audit_service(request).record(
+        user.id, "batch_job_delete", "batch_job", job_id, "success",
+        request_ip(request),
+    )
+    return None
+
+
 def _stream_and_close(stream) -> Iterator[bytes]:
     try:
         while chunk := stream.read(64 * 1024):

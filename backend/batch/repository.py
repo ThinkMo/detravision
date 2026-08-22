@@ -385,6 +385,51 @@ class BatchRepository:
             session.execute(delete(BatchJob).where(BatchJob.id == job_id))
             return ExpiredJobCleanupResult("deleted")
 
+    def delete_job(
+        self,
+        job_id: int,
+        *,
+        user_id: int,
+        is_admin: bool,
+        delete_key: Callable[[str], None],
+    ) -> ExpiredJobCleanupResult:
+        with self._session_factory.begin() as session:
+            conditions = [BatchJob.id == job_id]
+            if not is_admin:
+                conditions.append(BatchJob.user_id == user_id)
+            session.execute(
+                update(BatchJob).where(*conditions).values(updated_at=BatchJob.updated_at)
+            )
+            job = session.scalar(
+                select(BatchJob).where(*conditions).with_for_update()
+            )
+            if job is None:
+                return ExpiredJobCleanupResult("missing")
+            if job.status in {"queued", "processing"}:
+                return ExpiredJobCleanupResult("busy")
+            images = session.scalars(
+                select(BatchImage).where(BatchImage.job_id == job_id)
+                .order_by(BatchImage.id).with_for_update()
+            ).all()
+            if any(image.status in {"queued", "processing"} for image in images):
+                return ExpiredJobCleanupResult("busy")
+            keys = tuple(dict.fromkeys(
+                key for image in images
+                for key in (image.source_key, image.annotated_key) if key is not None
+            ))
+            failed: list[str] = []
+            for key in keys:
+                try:
+                    delete_key(key)
+                except FileNotFoundError:
+                    pass
+                except Exception:
+                    failed.append(key)
+            if failed:
+                return ExpiredJobCleanupResult("file_failed", tuple(failed))
+            session.execute(delete(BatchJob).where(BatchJob.id == job_id))
+            return ExpiredJobCleanupResult("deleted")
+
     @staticmethod
     def _recompute_job(session: Session, job_id: int, now: datetime) -> None:
         success_count, failure_count, processing_count, queued_count = session.execute(

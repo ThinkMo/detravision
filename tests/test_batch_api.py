@@ -202,6 +202,26 @@ def test_batch_routes_require_authentication(batch_app):
         assert client.post("/api/batch-jobs", files=[]).status_code == 401
 
 
+def test_owner_deletes_completed_batch_job(batch_app):
+    _app, _auth, repository, storage, _factory, user_ids = batch_app
+    with client_for(batch_app, "user") as client:
+        created = client.post(
+            "/api/batch-jobs",
+            files=upload_files(("one.png", image_bytes(), "image/png")),
+        )
+        assert created.status_code == 201
+        job_id = created.json()["id"]
+        claimed = repository.claim_next_image()
+        assert claimed is not None
+        annotated = storage.save(io.BytesIO(b"result"), "batch-result", "jpg")
+        repository.complete_image(claimed.id, CompletedImage(annotated, None, []))
+        deleted = client.request("DELETE", f"/api/batch-jobs/{job_id}")
+
+    assert deleted.status_code == 204
+    assert repository.get_job(job_id, user_id=user_ids["operator"]) is None
+    assert stored_files(storage) == set()
+
+
 def test_upload_rejects_zero_and_more_than_twenty_images(batch_app):
     """Catches unusable empty jobs or requests that exceed the fixed image count."""
     _, _, repository, storage, _, user_ids = batch_app

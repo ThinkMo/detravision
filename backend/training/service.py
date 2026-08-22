@@ -25,6 +25,7 @@ _IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9_-]{8,64}\Z")
 
 class TrainingManager(Protocol):
     def wake(self) -> None: ...
+    def owns_job(self, job_id: int) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +146,27 @@ class TrainingService:
             )
         self._manager.wake()
         return job
+
+    def delete(self, job_id: int) -> None:
+        job = self.get_job(job_id)
+        if job["status"] not in {"stopped", "completed", "failed", "interrupted", "cancelled"} or self._manager.owns_job(job_id):
+            raise TrainingServiceError(409, "job_active", "Active training jobs cannot be deleted.")
+        if self._model_repository.has_model_for_training_job(job_id):
+            raise TrainingServiceError(409, "model_registered", "A registered model still references this training job.")
+        try:
+            run_dir = self._storage.run_path(str(job["run_key"]))
+            shutil.rmtree(run_dir)
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as exc:
+            raise TrainingServiceError(503, "cleanup_failed", "Training job cleanup failed.") from exc
+        try:
+            if not self._repository.delete_terminal(job_id):
+                raise TrainingServiceError(409, "job_active", "Active training jobs cannot be deleted.")
+        except TrainingServiceError:
+            raise
+        except Exception as exc:
+            raise TrainingServiceError(503, "cleanup_failed", "Training job cleanup failed.") from exc
 
     def resume(self, job_id: int, *, idempotency_key: str) -> dict[str, Any]:
         source = self.get_job(job_id)

@@ -332,6 +332,9 @@ class Repository:
             )
             return model_dict(row) if row is not None else None
 
+    def has_model_for_training_job(self, training_job_id: int) -> bool:
+        return self._trained_model(training_job_id) is not None
+
     def set_active_model(self, model_id: int) -> dict[str, Any] | None:
         """Atomically activate one model and return the previously active row."""
         with self.session_factory.begin() as session:

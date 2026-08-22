@@ -29,6 +29,7 @@ class FakeTrainingService:
     def __init__(self, job: dict) -> None:
         self.job = job
         self.created: list[dict] = []
+        self.deleted: list[int] = []
 
     def create(self, **kwargs):
         self.created.append(kwargs)
@@ -53,6 +54,10 @@ class FakeTrainingService:
     def register_model(self, job_id: int, *, name: str | None = None):
         self.get_job(job_id)
         return {"id": 9, "name": name or "candidate", "is_active": False, "source": "training"}
+
+    def delete(self, job_id: int):
+        self.get_job(job_id)
+        self.deleted.append(job_id)
 
 
 class FakeDatasetService:
@@ -285,3 +290,12 @@ def test_training_job_create_requires_dataset_key(tmp_path: Path) -> None:
 
     assert response.status_code == 422
     assert response.json()["code"] == "invalid_training_request"
+
+
+def test_admin_deletes_training_job_with_audit(tmp_path: Path) -> None:
+    app, service, audit = _app(tmp_path)
+    with TestClient(app) as client:
+        response = client.delete("/api/training-jobs/1")
+    assert response.status_code == 204
+    assert service.deleted == [1]
+    assert any(row[0][1:4] == ("training_delete", "training_job", 1) for row in audit.rows)

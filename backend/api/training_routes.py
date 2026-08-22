@@ -285,6 +285,21 @@ def get_training_job(
         return _error(exc)
 
 
+@router.delete("/training-jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_training_job(
+    job_id: int,
+    request: Request,
+    user: AuthenticatedUser = Depends(audited_admin("training_delete", "training_job")),
+):
+    try:
+        _service(request).delete(job_id)
+    except TrainingServiceError as exc:
+        _record(request, user, "training_delete", job_id, "rejected", details={"code": exc.code})
+        return _error(exc)
+    _record(request, user, "training_delete", job_id, "success")
+    return None
+
+
 def _mutate(
     request: Request,
     user: AuthenticatedUser,

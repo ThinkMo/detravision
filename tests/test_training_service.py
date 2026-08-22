@@ -27,6 +27,9 @@ class ManagerSpy:
     def wake(self):
         self.wakes += 1
 
+    def owns_job(self, _job_id: int) -> bool:
+        return False
+
 
 @pytest.fixture
 def service_context(tmp_path: Path):
@@ -450,7 +453,18 @@ def test_register_model_requires_unchanged_completed_best_and_keeps_candidate_in
         assert row.source == "training"
         assert row.base_model == "yolo11l.pt"
         assert row.imgsz == 640
-        assert json.loads(row.metrics_json)["classes"]["no_helmet"]["recall"] == 0.92
+    assert json.loads(row.metrics_json)["classes"]["no_helmet"]["recall"] == 0.92
+
+
+def test_delete_removes_terminal_unregistered_training_job(service_context):
+    service, repository, storage, _manager, _factory, admin_id, _settings = service_context
+    job, _best = completed_job(repository, storage, admin_id)
+    run_dir = storage.run_path(job["run_key"])
+
+    service.delete(job["id"])
+
+    assert repository.get_job(job["id"]) is None
+    assert not run_dir.exists()
 
 
 def test_register_model_rejects_best_changed_after_evaluation(service_context):

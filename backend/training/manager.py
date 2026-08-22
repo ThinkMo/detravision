@@ -154,6 +154,10 @@ class LocalTrainingManager:
             self._generation += 1
             self._condition.notify_all()
 
+    def owns_job(self, job_id: int) -> bool:
+        with self._condition:
+            return self._active is not None and self._active.job_id == job_id
+
     def _thread_main(self) -> None:
         try:
             self._run()

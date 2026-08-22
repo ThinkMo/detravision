@@ -76,6 +76,22 @@ def test_cleanup_deletes_files_then_expired_database_record(cleanup_context):
     summary = cleaner.run_once(now=NOW + timedelta(days=30))
 
     assert (summary.scanned_jobs, summary.deleted_jobs, summary.failed_jobs) == (1, 1, 0)
+
+
+def test_owner_deletes_terminal_batch_job_and_exact_files(cleanup_context):
+    repository, storage, _cleaner, owner_id = cleanup_context
+    job, source_key, result_key = _expired_completed_job(repository, storage, owner_id)
+
+    result = repository.delete_job(
+        job.id, user_id=owner_id, is_admin=False, delete_key=storage.delete
+    )
+
+    assert result.status == "deleted"
+    assert repository.get_job(job.id, user_id=owner_id) is None
+    with pytest.raises(FileNotFoundError):
+        storage.open(source_key)
+    with pytest.raises(FileNotFoundError):
+        storage.open(result_key)
     assert repository.get_job(job.id) is None
     for key in (source_key, result_key):
         with pytest.raises(FileNotFoundError):

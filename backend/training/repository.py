@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -132,6 +132,16 @@ class TrainingRepository:
             updated_at=now,
         )
         return self._insert_idempotent(job, idempotency_key)
+
+    def delete_terminal(self, job_id: int) -> bool:
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                delete(TrainingJob).where(
+                    TrainingJob.id == job_id,
+                    TrainingJob.status.in_(TERMINAL_STATUSES),
+                )
+            )
+            return bool(result.rowcount)
 
     def get_job(self, job_id: int) -> dict[str, Any] | None:
         with self._session_factory() as session:
