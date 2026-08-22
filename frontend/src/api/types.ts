@@ -78,6 +78,92 @@ export interface ModelVersion {
   map50: number | null;
   is_active: boolean;
   created_at: string;
+  training_job_id?: number | null;
+  source?: string | null;
+  base_model?: string | null;
+  imgsz?: number | null;
+  metrics?: TrainingMetrics | null;
+  deployment_runtime?: string | null;
+}
+
+export type TrainingStatus = "queued" | "running" | "evaluating" | "stopping" | "stopped" | "completed" | "failed" | "interrupted" | "cancelled";
+
+export interface TrainingMetricSet {
+  precision: number | null;
+  recall: number | null;
+  map50: number | null;
+  map50_95: number | null;
+}
+
+export interface TrainingMetrics extends TrainingMetricSet {
+  classes?: Record<string, TrainingMetricSet>;
+}
+
+export interface TrainingCatalog {
+  models: Array<{ id: string; series: string; size: string }>;
+  executors: Array<{ id: "local" | "remote"; enabled: boolean }>;
+  dataset: { id: string; available: boolean; has_test_split: boolean; classes: string[] };
+}
+
+export interface TrainingJob {
+  id: number;
+  created_by?: number;
+  executor: "local";
+  base_model: string;
+  imgsz: 640 | 960;
+  epochs: number;
+  batch: "1" | "2" | "4" | "8" | "auto";
+  device: "auto" | "cpu" | "0";
+  patience: number;
+  dataset_key?: string;
+  dataset_classes?: string[];
+  status: TrainingStatus;
+  current_epoch: number;
+  total_epochs: number;
+  progress?: number;
+  stop_requested?: boolean;
+  has_best: boolean;
+  has_last: boolean;
+  precision?: number | null;
+  recall?: number | null;
+  map50?: number | null;
+  map50_95?: number | null;
+  no_helmet_precision?: number | null;
+  no_helmet_recall?: number | null;
+  accepted?: boolean | null;
+  metrics?: TrainingMetrics | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  resume_from_id?: number | null;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface TrainingJobDetail extends TrainingJob {
+  recent_log?: string;
+  log?: string;
+  confusion_matrix_url?: string | null;
+  log_url?: string | null;
+  registered_model_id?: number | null;
+}
+
+export interface TrainingJobPage {
+  items: TrainingJob[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface TrainingJobCreate {
+  executor: "local";
+  base_model: string;
+  imgsz: 640 | 960;
+  epochs: number;
+  batch: "1" | "2" | "4" | "8" | "auto";
+  device: "auto" | "cpu" | "0";
+  patience: number;
 }
 
 export interface AuditLog {

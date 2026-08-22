@@ -74,6 +74,22 @@ class ApiClient {
     }
     return (await response.json()) as T;
   }
+
+  async requestText(path: string): Promise<string> {
+    if (!path.startsWith("/") || path.startsWith("//")) {
+      throw new TypeError("API requests must use a same-origin absolute path");
+    }
+    const response = await fetch(path, { credentials: "same-origin", headers: { Accept: "text/plain" } });
+    if (!response.ok) {
+      const body = await readError(response);
+      if (response.status === 401) {
+        this.authExpiredListeners.forEach((listener) => listener());
+        throw new AuthExpiredError(body);
+      }
+      throw new ApiError(response.status, body);
+    }
+    return response.text();
+  }
 }
 
 export const api = new ApiClient();

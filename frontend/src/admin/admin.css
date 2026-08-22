@@ -5,6 +5,9 @@
 .admin-heading h1 { margin-top: .2rem; font-size: clamp(1.65rem, 3vw, 2.25rem); }
 .admin-heading span { display: block; margin-top: .3rem; color: var(--color-text-muted); }
 .admin-heading button, .admin-form button[type="submit"], .admin-filters button, .admin-dialog .danger-button, .admin-dialog footer > button:not(.secondary-button) { padding: .58rem .9rem; color: #fff; border: 0; border-radius: var(--radius-sm); background: var(--color-safe); font-weight: 700; }
+.admin-subheading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.admin-subheading h2 { margin: 0; }
+.admin-subheading button { padding: .58rem .9rem; color: #fff; border: 0; border-radius: var(--radius-sm); background: var(--color-safe); font-weight: 700; }
 .admin-notice { margin: 0; padding: .7rem .85rem; color: #08715e; border: 1px solid #bce6dc; border-radius: var(--radius-sm); background: #e6f7f2; }
 .admin-notice:empty { display: none; }
 .admin-notice--error { color: var(--color-danger); border-color: #efc7c3; background: #fff0ef; }
@@ -46,6 +49,29 @@
 .file-button input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .admin-filters { display: grid; grid-template-columns: repeat(5, minmax(8rem, 1fr)) auto; align-items: end; gap: .7rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: #fff; }
 .admin-pagination { display: flex; align-items: center; justify-content: flex-end; gap: .75rem; }
+.training-jobs, .training-job-list { display: grid; gap: 1rem; }
+.training-job-list { grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); }
+.training-job-card { display: grid; gap: .85rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: #fff; box-shadow: var(--shadow-sm); }
+.training-job-card > header, .training-job-card > header > div { display: flex; align-items: center; justify-content: space-between; gap: .65rem; }
+.training-job-card > header > div { align-items: flex-start; flex-direction: column; }
+.training-job-card > header span, .training-progress span { color: var(--color-text-muted); font-size: .78rem; }
+.training-job-card footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; }
+.training-status { padding: .28rem .55rem; border-radius: 999px; background: #eef3f1; font-weight: 700; }
+.training-status--running, .training-status--evaluating, .training-status--completed { color: #08715e !important; background: #e6f7f2; }
+.training-status--failed, .training-status--interrupted { color: var(--color-danger) !important; background: #fff0ef; }
+.training-progress { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: .75rem; }
+.training-progress progress { width: 100%; accent-color: var(--color-safe); }
+.training-metrics { display: grid; gap: .65rem; }
+.training-metrics dl { display: grid; grid-template-columns: repeat(2, 1fr); gap: .5rem; margin: 0; }
+.training-metrics dl div { padding: .55rem; border-radius: var(--radius-sm); background: #f7f9f8; }
+.training-metrics dt { color: var(--color-text-muted); font-size: .72rem; }
+.training-metrics dd { margin: .2rem 0 0; font-weight: 750; }
+.training-accepted { color: #08715e; }
+.training-rejected, .training-error, .training-warning { color: var(--color-danger); }
+.training-warning { margin: 0; padding: .65rem; border-radius: var(--radius-sm); background: #fff6e5; }
+.training-detail-dialog { width: min(92vw, 60rem); max-height: 90vh; overflow: auto; }
+.training-log { max-height: 18rem; overflow: auto; padding: .8rem; color: #d9f3ec; border-radius: var(--radius-sm); background: #102421; white-space: pre-wrap; word-break: break-word; }
+.training-artifact { display: block; max-width: 100%; border-radius: var(--radius-sm); }
 @media (max-width: 799px) { .admin-heading { align-items: start; flex-direction: column; } .admin-filters { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 479px) { .admin-tabs { width: 100%; overflow-x: auto; } .admin-filters { grid-template-columns: 1fr; } }
 @media (max-width: 639px) {
