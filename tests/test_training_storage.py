@@ -160,6 +160,37 @@ def test_tail_log_scrubs_arbitrary_absolute_paths_and_traceback_source(tmp_path:
     assert "RuntimeError: training failed" in result
 
 
+def test_tail_log_scrubs_network_paths_and_local_file_uris_only(tmp_path: Path):
+    """Catches slash-UNC and file URIs leaking without destroying ordinary URLs."""
+    storage = make_storage(tmp_path, tail_bytes=4096)
+    run_key = storage.create_run()
+    storage.resolve_artifact(run_key, "log").write_text(
+        "artifact=//server/share/private/best.pt\n"
+        "posix=FILE:///srv/private/token\n"
+        "drive=file://C:/Private/customer/token.txt\n"
+        "host=file://server/share/private/key.txt\n"
+        "docs=https://example.test/training/help\n"
+        "api=http://localhost:8000/health\n"
+        "division=left//right\n",
+        encoding="utf-8",
+    )
+
+    result = storage.tail_log(run_key, limit=4096)
+
+    for secret in (
+        "//server/share/private",
+        "file:///srv/private",
+        "file://C:/Private",
+        "file://server/share/private",
+        "token.txt",
+        "key.txt",
+    ):
+        assert secret.casefold() not in result.casefold()
+    assert "https://example.test/training/help" in result
+    assert "http://localhost:8000/health" in result
+    assert "left//right" in result
+
+
 def test_tail_log_does_not_leak_a_path_when_read_starts_in_its_middle(tmp_path: Path):
     """Catches byte-tail seeking exposing a suffix of an absolute private path."""
     storage = make_storage(tmp_path, tail_bytes=128)

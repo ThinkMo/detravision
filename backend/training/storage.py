@@ -26,6 +26,10 @@ _UNC_PATH = re.compile(r"\\\\[^\r\n\t\s\\/'\"<>|]+\\[^\r\n\t\s'\"<>|]+")
 _POSIX_PATH = re.compile(
     r"(?<![a-zA-Z0-9_:/.])/(?:[^\r\n\t\s/'\"<>|]+/)*[^\r\n\t\s/'\"<>|]+"
 )
+_FILE_URI = re.compile(r"(?i)\bfile://[^\r\n\t\s]+")
+_SLASH_UNC_PATH = re.compile(
+    r"(?:^|[\s=('\"])//[^\r\n\t\s/]+/[^\r\n\t\s]+"
+)
 
 
 class TrainingStorage:
@@ -136,7 +140,9 @@ class TrainingStorage:
                 continue
             redact_source_line = False
             if (
-                _WINDOWS_DRIVE_PATH.search(line)
+                _FILE_URI.search(line)
+                or _SLASH_UNC_PATH.search(line)
+                or _WINDOWS_DRIVE_PATH.search(line)
                 or _UNC_PATH.search(line)
                 or _POSIX_PATH.search(line)
             ):
