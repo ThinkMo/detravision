@@ -287,6 +287,31 @@ class TrainingDatasetRepository:
                 raise TrainingDatasetConflictError("dataset missing")
             return _dataset_dict(row)
 
+    def publish(
+        self, dataset_id: int, expected_revision: int, digest: str
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                update(TrainingDataset)
+                .where(
+                    TrainingDataset.id == dataset_id,
+                    TrainingDataset.status == "editing",
+                    TrainingDataset.revision == expected_revision,
+                )
+                .values(
+                    status="published", enabled=True,
+                    manifest_digest=digest, published_at=now,
+                    revision=expected_revision + 1, updated_at=now,
+                )
+            )
+            if result.rowcount != 1:
+                raise TrainingDatasetConflictError("dataset revision conflict")
+            row = session.get(TrainingDataset, dataset_id)
+            if row is None:
+                raise TrainingDatasetConflictError("dataset missing")
+            return _dataset_dict(row)
+
     def update(
         self, dataset_id: int, values: Mapping[str, object]
     ) -> dict[str, Any] | None:

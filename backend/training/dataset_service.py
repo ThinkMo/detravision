@@ -245,7 +245,11 @@ class DatasetService:
         row = self._repository.get(dataset_id)
         if row is None:
             raise DatasetServiceError("dataset_not_found")
-        if not row["enabled"]:
+        if not row["enabled"] or row.get("status", "published") != "published":
+            raise DatasetServiceError("dataset_invalid")
+        if row.get("root_dataset_id") is not None and not self._valid_digest(
+            row.get("manifest_digest")
+        ):
             raise DatasetServiceError("dataset_invalid")
         validated = self._validate(row)
         root = self._root(validated["root_alias"])
@@ -382,3 +386,10 @@ class DatasetService:
             "published_at": row.get("published_at"),
             "manifest_digest": row.get("manifest_digest"),
         }
+
+    @staticmethod
+    def _valid_digest(value: object) -> bool:
+        return (
+            isinstance(value, str) and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+        )
