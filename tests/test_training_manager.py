@@ -566,6 +566,67 @@ def test_launch_persistence_failure_terminates_owned_child_and_continues_queue(
         manager.stop()
 
 
+@pytest.mark.parametrize(
+    ("stage", "terminal_status"),
+    [("pid_persistence", "failed"), ("job_missing", "interrupted")],
+)
+def test_unconfirmed_launch_and_missing_job_failures_quarantine_owned_child(
+    manager_context, stage: str, terminal_status: str
+):
+    """Catches exceptional launch/lookup paths abandoning a still-live child."""
+    repository, storage, admin_id = manager_context
+    first = queued_job(repository, storage, admin_id, f"quarantine-{stage}")
+    second = queued_job(repository, storage, admin_id, f"quarantine-next-{stage}")
+    original_update = repository.update_progress
+    original_get = repository.get_job
+    popen = PopenRecorder([FaultyStopProcess("kill_error"), FakeProcess()])
+    injected = False
+
+    if stage == "pid_persistence":
+        def flaky_update(*args, **kwargs):
+            nonlocal injected
+            if kwargs.get("pid") is not None and not injected:
+                injected = True
+                raise RuntimeError("pid persistence failed")
+            return original_update(*args, **kwargs)
+
+        repository.update_progress = flaky_update
+    else:
+        def missing_once(job_id):
+            nonlocal injected
+            if popen.calls and not injected:
+                injected = True
+                return None
+            return original_get(job_id)
+
+        repository.get_job = missing_once
+
+    manager = LocalTrainingManager(
+        repository,
+        storage,
+        popen_factory=popen,
+        stop_timeout_seconds=0.01,
+        join_timeout_seconds=0.02,
+    )
+    assert manager.start() is True
+    wait_until(lambda: len(popen.calls) == 1)
+    process = popen.calls[0][2]
+    wait_until(lambda: process.terminated)
+
+    assert original_get(first["id"])["status"] == "running"
+    assert original_get(second["id"])["status"] == "queued"
+    assert popen.calls[0][1]["stdout"].closed is False
+    contender = LocalTrainingManager(repository, storage, popen_factory=PopenRecorder())
+    assert contender.start() is False
+    assert manager.stop() is False
+
+    process.finish(-9)
+    manager.wake()
+    wait_until(lambda: original_get(first["id"])["status"] == terminal_status)
+    assert manager.stop() is True
+    assert popen.calls[0][1]["stdout"].closed is True
+
+
 def test_stop_returns_false_when_scheduler_cannot_join(manager_context):
     """Catches shutdown silently claiming success while claim_next is still blocked."""
     repository, storage, _admin_id = manager_context

@@ -113,6 +113,7 @@ class LocalTrainingManager:
         self._shutdown = False
         self._active: _ActiveProcess | None = None
         self._quarantined = False
+        self._quarantine_terminal: dict[str, object] | None = None
         self._local_lock = _LocalManagerLock(storage.root)
 
     def start(self) -> bool:
@@ -220,7 +221,16 @@ class LocalTrainingManager:
             self._repository.update_progress(job_id, current_epoch=int(job.get("current_epoch", 0)), pid=process.pid)
         except BaseException:
             if process is not None and log is not None:
-                self._terminate(self._active or _ActiveProcess(job_id, run_key, process, log))
+                active = self._active or _ActiveProcess(job_id, run_key, process, log)
+                self._active = active
+                if not self._terminate(active):
+                    self._quarantine_active(
+                        active,
+                        status="failed",
+                        error_code="training_failed",
+                        error_message="Training did not produce a valid model.",
+                    )
+                    return
             if log is not None:
                 self._close_log(log)
             self._active = None
@@ -233,25 +243,31 @@ class LocalTrainingManager:
         active = self._active
         if active is None:
             return
+        if self._quarantined:
+            self._finalize_quarantined(active)
+            return
         job = self._repository.get_job(active.job_id)
         if job is None:
-            self._terminate(active)
-            self._clear_active(active)
+            terminal = {
+                "status": "interrupted",
+                "has_best": self._artifact_exists(active.run_key, "best"),
+                "has_last": self._artifact_exists(active.run_key, "last"),
+            }
+            if not self._terminate(active):
+                self._quarantine_active(active, **terminal)
+                return
+            if self._safe_mark_terminal(active.job_id, **terminal):
+                self._clear_active(active)
             return
         if job["status"] == "stopping" or job["stop_requested"]:
-            if self._quarantined:
-                if self._process_exited(active):
-                    if self._safe_mark_terminal(
-                        active.job_id,
-                        status="interrupted",
-                        has_best=self._artifact_exists(active.run_key, "best"),
-                        has_last=self._artifact_exists(active.run_key, "last"),
-                    ):
-                        self._clear_active(active)
-                return
             stopped = self._terminate(active)
             if not stopped:
-                self._quarantined = True
+                self._quarantine_active(
+                    active,
+                    status="interrupted",
+                    has_best=self._artifact_exists(active.run_key, "best"),
+                    has_last=self._artifact_exists(active.run_key, "last"),
+                )
                 return
             finalized = self._safe_mark_terminal(
                 active.job_id, status="stopped",
@@ -331,11 +347,16 @@ class LocalTrainingManager:
         active = self._active
         if active is None:
             return
-        if not self._quarantined:
-            if not self._terminate(active):
-                self._quarantined = True
-                return
-        elif not self._process_exited(active):
+        if self._quarantined:
+            self._finalize_quarantined(active)
+            return
+        if not self._terminate(active):
+            self._quarantine_active(
+                active,
+                status="interrupted",
+                has_best=self._artifact_exists(active.run_key, "best"),
+                has_last=self._artifact_exists(active.run_key, "last"),
+            )
             return
         if not self._safe_mark_terminal(
             active.job_id, status="interrupted",
@@ -344,6 +365,21 @@ class LocalTrainingManager:
         ):
             return
         self._clear_active(active)
+
+    def _quarantine_active(self, active: _ActiveProcess, **terminal: object) -> None:
+        """Retain sole ownership until the child is observably terminated."""
+        self._active = active
+        self._quarantined = True
+        self._quarantine_terminal = terminal
+
+    def _finalize_quarantined(self, active: _ActiveProcess) -> bool:
+        if not self._process_exited(active):
+            return False
+        terminal = self._quarantine_terminal
+        if terminal is None or not self._safe_mark_terminal(active.job_id, **terminal):
+            return False
+        self._clear_active(active)
+        return True
 
     @staticmethod
     def _process_exited(active: _ActiveProcess) -> bool:
@@ -382,6 +418,7 @@ class LocalTrainingManager:
         if self._active is active:
             self._active = None
         self._quarantined = False
+        self._quarantine_terminal = None
         self.wake()
 
     @staticmethod
