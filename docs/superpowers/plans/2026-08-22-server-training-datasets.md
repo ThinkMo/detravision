@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let administrators define datasets beneath approved server roots, select one per local training job, reject unavailable base weights before queueing, and expose safe Chinese failure diagnostics.
+**Goal:** Let administrators define datasets beneath approved server roots, select one per local training job, reject unavailable base weights before queueing, expose safe Chinese failure diagnostics, and safely delete recognition/training tasks.
 
-**Architecture:** Environment configuration supplies aliased absolute roots; APIs expose only aliases and normalized relative paths. Persisted dataset definitions are revalidated when a job is created, then converted into a contained immutable job-local YAML snapshot. Existing training scheduling remains unchanged, while worker/manager failures gain bounded structured diagnostics and the frontend maps stable codes to Chinese.
+**Architecture:** Environment configuration supplies aliased absolute roots; APIs expose only aliases and normalized relative paths. Persisted dataset definitions are revalidated when a job is created, then converted into a contained immutable job-local YAML snapshot. Existing training scheduling remains unchanged, while worker/manager failures gain bounded structured diagnostics. Explicit delete services lock and re-read terminal jobs, remove contained artifacts before database rows, and protect registered-model provenance.
 
 **Tech Stack:** Python 3.12, FastAPI, SQLAlchemy 2, Alembic, SQLite/MySQL-compatible `Text`, React 19, TypeScript, TanStack Query, Vitest.
 
@@ -19,6 +19,8 @@
 - Persist JSON/status values as `Text`; migrations must work on SQLite and emit valid MySQL 8.0.13+ DDL.
 - Existing `TRAINING_DATASET_YAML` remains a read-only legacy catalog entry only when contained by an authorized root.
 - Keep stable public error codes, bounded logs, same-origin mutation protection, admin authorization, and path-free audits.
+- Recognition owners may delete their own terminal jobs; administrators may delete any terminal recognition job and terminal unregistered training job.
+- Active jobs return `job_active`; registered training provenance returns `model_registered`; cleanup failure retains the database row and returns `cleanup_failed`.
 - Follow RED/GREEN TDD. Run focused tests, Python compile checks, frontend typecheck/build; defer real YOLO, full regression, browser E2E, and live MySQL.
 
 ---
@@ -379,6 +381,170 @@ git commit -m "feat: manage server training datasets"
 
 ---
 
+### Task 6: Safe recognition-job and training-job deletion APIs
+
+**Files:**
+- Modify: `backend/batch/repository.py`
+- Modify: `backend/batch/service.py`
+- Modify: `backend/batch/cleanup.py`
+- Modify: `backend/api/batch_routes.py`
+- Modify: `backend/training/repository.py`
+- Modify: `backend/training/service.py`
+- Modify: `backend/training/manager.py`
+- Modify: `backend/api/training_routes.py`
+- Test: `tests/test_batch_api.py`
+- Modify: `tests/test_batch_cleanup.py`
+- Modify: `tests/test_training_api.py`
+- Modify: `tests/test_training_service.py`
+- Modify: `tests/test_training_manager.py`
+
+**Interfaces:**
+- Produces: `BatchService.delete_job(job_id: int, user_id: int, is_admin: bool) -> None`.
+- Produces: `TrainingService.delete(job_id: int) -> None`.
+- Produces: `LocalTrainingManager.owns_job(job_id: int) -> bool`, synchronized by
+  the manager condition lock and true for normal or quarantined active handles.
+- Produces: `DELETE /api/batch-jobs/{id}` and `DELETE /api/training-jobs/{id}`, both returning HTTP 204.
+- Keeps: parent-job-first database locking and stable errors `job_active`, `model_registered`, and `cleanup_failed`.
+
+- [ ] **Step 1: Write recognition deletion RED tests**
+
+```python
+def test_owner_deletes_terminal_batch_job_and_all_files(client, completed_job):
+    response = client.delete(
+        f"/api/batch-jobs/{completed_job.id}",
+        headers={"Origin": "http://testserver"},
+        cookies=owner_cookie,
+    )
+    assert response.status_code == 204
+    assert repository.get_job(completed_job.id) is None
+    assert not source_path.exists()
+    assert not annotated_path.exists()
+```
+
+Cover another owner receiving 404, admin deletion, queued/processing 409, missing task 404, missing files as idempotent success, a file-delete exception returning 503 with the row retained, database failure after file deletion retaining the row for retry, and safe audit fields.
+
+- [ ] **Step 2: Run recognition tests and verify RED**
+
+Run: `.venv\Scripts\python.exe -m pytest tests/test_batch_api.py tests/test_batch_cleanup.py -k delete -v`
+
+Expected: FAIL because the DELETE route/service contract does not exist.
+
+- [ ] **Step 3: Generalize the locked batch cleanup primitive**
+
+Extract the state/file re-read portion of `cleanup_expired_job` into one private repository primitive used by both retention and explicit deletion. Explicit deletion omits the expiry predicate but enforces owner/admin and terminal status while holding the parent lock. Delete all exact stored source/annotated keys before deleting the row; keep processing images and their parent untouched.
+
+- [ ] **Step 4: Implement recognition DELETE route and audit**
+
+Map missing/not-owned to the existing non-enumerating 404, active to 409 `job_active`, and storage cleanup failure to 503 `cleanup_failed`. Require same-origin protection and record actor, job ID, outcome, and stable code only.
+
+- [ ] **Step 5: Write training deletion RED tests**
+
+```python
+def test_admin_deletes_terminal_unregistered_training_job(service, completed_job):
+    service.delete(completed_job["id"])
+    assert repository.get_job(completed_job["id"]) is None
+    assert not storage.run_path(completed_job["run_key"]).exists()
+```
+
+Cover admin-only API, queued/running/evaluating/stopping 409, each terminal status,
+registered inactive/active model 409, normal/quarantined manager-owned job rejection,
+contained run-directory cleanup, cleanup failure retaining the row, missing directory
+idempotency, database rollback/retry, and path-free audit/errors.
+
+- [ ] **Step 6: Run training tests and verify RED**
+
+Run: `.venv\Scripts\python.exe -m pytest tests/test_training_api.py tests/test_training_service.py tests/test_training_manager.py -k delete -v`
+
+Expected: FAIL because training deletion is absent.
+
+- [ ] **Step 7: Implement training deletion and route**
+
+Add `owns_job()` without exposing the process handle. Add a repository deletion method
+that locks/re-reads the job, queries `ModelVersion.training_job_id`, invokes a
+contained run-directory cleanup callback while the parent lock is held, and deletes
+only an allowed terminal unreferenced row after cleanup succeeds.
+`TrainingService.delete` rejects manager-owned jobs before entering that operation.
+Filesystem or repository exceptions become stable safe service errors.
+
+- [ ] **Step 8: Run Task 6 focused GREEN**
+
+Run: `.venv\Scripts\python.exe -m pytest tests/test_batch_api.py tests/test_batch_cleanup.py tests/test_training_api.py tests/test_training_service.py tests/test_training_manager.py -k "delete or cleanup" -v`
+
+Expected: PASS; no real model, GPU, or MySQL required.
+
+- [ ] **Step 9: Commit Task 6**
+
+```powershell
+git add backend/batch/repository.py backend/batch/service.py backend/batch/cleanup.py backend/api/batch_routes.py backend/training/repository.py backend/training/service.py backend/training/manager.py backend/api/training_routes.py tests/test_batch_api.py tests/test_batch_cleanup.py tests/test_training_api.py tests/test_training_service.py tests/test_training_manager.py
+git commit -m "feat: delete completed inference and training jobs"
+```
+
+---
+
+### Task 7: Recognition and training deletion UI
+
+**Files:**
+- Modify: `frontend/src/batch/batchApi.ts`
+- Modify: `frontend/src/batch/BatchPage.tsx`
+- Modify: `frontend/src/batch/JobList.tsx`
+- Modify: `frontend/src/batch/JobDetail.tsx`
+- Modify: `frontend/src/batch/BatchPage.test.tsx`
+- Modify: `frontend/src/admin/models/trainingApi.ts`
+- Modify: `frontend/src/admin/models/TrainingJobsPanel.tsx`
+- Modify: `frontend/src/admin/models/TrainingJobDetail.tsx`
+- Modify: `frontend/src/admin/models/ModelsPage.test.tsx`
+- Modify: `frontend/src/admin/admin.css`
+- Modify: `frontend/src/batch/batch.css`
+
+**Interfaces:**
+- Consumes: Task 6 DELETE endpoints and stable error codes.
+- Produces: `deleteJob(id)` in batch/training APIs and destructive confirmation flows in list/detail views.
+
+- [ ] **Step 1: Write multi-image deletion UI RED tests**
+
+Assert an owner sees delete only for their terminal task, an administrator sees it for any terminal task, active jobs have no delete action, confirmation is required, failure remains inside the dialog with `role=alert`, successful list deletion invalidates `batch-jobs`, and successful detail deletion navigates to `/batch`.
+
+- [ ] **Step 2: Write training deletion UI RED tests**
+
+Assert terminal unregistered jobs show delete, active and registered jobs do not, confirmation names the task ID, 409/503 errors appear in the dialog, success invalidates list/detail queries and closes detail, and stop/resume/register behavior remains unchanged.
+
+- [ ] **Step 3: Run deletion UI tests and verify RED**
+
+Run: `$env:PATH="D:\free\.tools\node-runtime;$env:PATH"; npm --prefix frontend run test:run -- BatchPage.test.tsx ModelsPage.test.tsx`
+
+Expected: FAIL because neither frontend exposes a delete mutation or action.
+
+- [ ] **Step 4: Implement typed DELETE calls and confirmation state**
+
+Use `api.request<void>(path, { method: "DELETE" })`, existing `ConfirmDialog`, per-mutation error reset, and Chinese stable-code mapping. Do not optimistically remove data before the server confirms cleanup.
+
+- [ ] **Step 5: Wire list/detail refresh and navigation**
+
+After success invalidate the exact list/detail query prefixes. Batch detail navigates to `/batch`; training detail closes to its task list. Keep focus restoration and in-modal alert behavior from the shared dialog contract.
+
+- [ ] **Step 6: Run Task 7 focused GREEN and static gates**
+
+Run: `$env:PATH="D:\free\.tools\node-runtime;$env:PATH"; npm --prefix frontend run test:run -- BatchPage.test.tsx ModelsPage.test.tsx`
+
+Run: `$env:PATH="D:\free\.tools\node-runtime;$env:PATH"; npm --prefix frontend run typecheck`
+
+Run: `$env:PATH="D:\free\.tools\node-runtime;$env:PATH"; npm --prefix frontend run build`
+
+Run: `.venv\Scripts\python.exe -m compileall -q backend training tests`
+
+Run: `git diff --check`
+
+Expected: all commands exit zero; real training/full integration remains deferred.
+
+- [ ] **Step 7: Commit Task 7**
+
+```powershell
+git add frontend/src/batch/batchApi.ts frontend/src/batch/BatchPage.tsx frontend/src/batch/JobList.tsx frontend/src/batch/JobDetail.tsx frontend/src/batch/BatchPage.test.tsx frontend/src/admin/models/trainingApi.ts frontend/src/admin/models/TrainingJobsPanel.tsx frontend/src/admin/models/TrainingJobDetail.tsx frontend/src/admin/models/ModelsPage.test.tsx frontend/src/admin/admin.css frontend/src/batch/batch.css
+git commit -m "feat: delete inference and training tasks"
+```
+
+---
+
 ## Deferred integration acceptance
 
 - Real one-epoch YOLO training using a newly defined dataset.
@@ -386,3 +552,4 @@ git commit -m "feat: manage server training datasets"
 - Browser end-to-end directory selection and task creation.
 - Live MySQL migration/CRUD/concurrency validation.
 - Network download behavior for absent Ultralytics checkpoints.
+- Browser end-to-end deletion, filesystem fault injection, and concurrent worker/delete races beyond focused deterministic tests.
