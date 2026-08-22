@@ -19,6 +19,8 @@ from backend.db.models import (
     Camera,
     DetectionEvent,
     ModelVersion,
+    TrainingDataset,
+    TrainingDatasetImage,
     TrainingJob,
     TrainingScheduler,
     UserSession,
@@ -227,6 +229,65 @@ def test_training_dataset_migration_adds_definition_and_job_reference(tmp_path):
     assert (("training_dataset_id",), "training_dataset") in job_foreign_keys
 
 
+def test_dataset_annotation_migration_versions_datasets_and_indexes_images(tmp_path):
+    """Catches mutable published datasets or an annotation index without revision control."""
+    url = "sqlite:///" + (tmp_path / "dataset-annotation.db").as_posix()
+    run_migrations(url)
+    inspector = inspect(create_engine(url))
+
+    dataset_columns = {
+        column["name"] for column in inspector.get_columns("training_dataset")
+    }
+    assert {
+        "version", "status", "parent_id", "root_dataset_id", "revision",
+        "published_at", "manifest_digest",
+    } <= dataset_columns
+    assert "training_dataset_image" in inspector.get_table_names()
+    image_columns = {
+        column["name"] for column in inspector.get_columns("training_dataset_image")
+    }
+    assert {
+        "dataset_id", "split", "image_key", "display_name", "width", "height",
+        "review_status", "revision", "content_digest", "validation_code",
+    } <= image_columns
+    assert isinstance(TrainingDataset.__table__.c.status.type, Text)
+    assert isinstance(TrainingDatasetImage.__table__.c.review_status.type, Text)
+
+
+def test_mysql_dataset_annotation_migration_is_offline_portable():
+    """Catches SQLite-only version or image-review DDL."""
+    output = StringIO()
+    config = alembic_config(
+        "mysql+pymysql://safety:safety@127.0.0.1/safety_test?charset=utf8mb4"
+    )
+    config.output_buffer = output
+
+    command.upgrade(config, "0008", sql=True)
+
+    sql = output.getvalue()
+    assert "CREATE TABLE training_dataset_image" in sql
+    assert "review_status TEXT NOT NULL DEFAULT ('pending_annotation')" in sql
+    assert "ALTER TABLE training_dataset" in sql
+    assert "manifest_digest VARCHAR(64)" in sql
+
+
+def test_dataset_annotation_migration_downgrades_and_reupgrades(tmp_path):
+    """Catches a version migration that cannot be rolled back on local SQLite."""
+    url = "sqlite:///" + (tmp_path / "dataset-annotation-roundtrip.db").as_posix()
+    config = alembic_config(url)
+    command.upgrade(config, "0008")
+    command.downgrade(config, "0007")
+    downgraded = inspect(create_engine(url))
+    assert "training_dataset_image" not in downgraded.get_table_names()
+    assert "status" not in {
+        column["name"] for column in downgraded.get_columns("training_dataset")
+    }
+
+    command.upgrade(config, "0008")
+    upgraded = inspect(create_engine(url))
+    assert "training_dataset_image" in upgraded.get_table_names()
+
+
 def test_mysql_training_dataset_migration_is_offline_portable():
     """Catches SQLite-only DDL or MySQL-incompatible JSON/default fields."""
     output = StringIO()
@@ -354,7 +415,7 @@ def test_legacy_sqlite_is_stamped_then_upgraded(legacy_database_url):
     run_migrations(legacy_database_url)
 
     with create_engine(legacy_database_url).connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0006"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0008"
         event_columns = {column["name"] for column in inspect(connection).get_columns("detection_event")}
     assert {"ack_by", "ack_user_id"} <= event_columns
 

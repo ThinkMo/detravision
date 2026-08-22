@@ -112,6 +112,13 @@ def test_training_dataset_repository_round_trip(dataset_repository):
         "test_split": "images/test",
         "classes": ["person", "helmet", "no_helmet"],
         "enabled": True,
+        "version": 1,
+        "status": "published",
+        "parent_id": None,
+        "root_dataset_id": None,
+        "revision": 0,
+        "published_at": created["published_at"],
+        "manifest_digest": None,
         "created_by": admin_id,
         "created_at": created["created_at"],
         "updated_at": created["updated_at"],
@@ -122,6 +129,53 @@ def test_training_dataset_repository_round_trip(dataset_repository):
         "no_helmet",
     ]
     assert [item["id"] for item in repository.list()] == [created["id"]]
+
+
+def test_training_dataset_repository_creates_editing_version(dataset_repository):
+    repository, _session_factory, admin_id = dataset_repository
+    source = repository.create(_dataset_values(admin_id))
+
+    editing = repository.create_editing_version(
+        source["id"],
+        {"directory": "dataset-version-2", "created_by": admin_id},
+    )
+
+    assert editing["version"] == 2
+    assert editing["status"] == "editing"
+    assert editing["parent_id"] == source["id"]
+    assert editing["root_dataset_id"] == source["id"]
+    assert editing["enabled"] is False
+    assert [item["version"] for item in repository.list_versions(source["id"])] == [1, 2]
+
+
+def test_training_dataset_image_revision_is_compare_and_swap(dataset_repository):
+    from backend.training.dataset_repository import TrainingDatasetConflictError
+
+    repository, _session_factory, admin_id = dataset_repository
+    source = repository.create(_dataset_values(admin_id))
+    editing = repository.create_editing_version(
+        source["id"], {"directory": "dataset-version-2", "created_by": admin_id}
+    )
+    image = repository.upsert_image_index(editing["id"], [{
+        "split": "test",
+        "image_key": "image1.jpg",
+        "display_name": "image1.jpg",
+        "width": 640,
+        "height": 480,
+        "review_status": "pending_annotation",
+        "content_digest": "a" * 64,
+    }])[0]
+
+    changed = repository.update_image_review(
+        image["id"], image["revision"], {"review_status": "annotated"}
+    )
+
+    assert changed["revision"] == 1
+    assert changed["review_status"] == "annotated"
+    with pytest.raises(TrainingDatasetConflictError):
+        repository.update_image_review(
+            image["id"], image["revision"], {"review_status": "confirmed_empty"}
+        )
 
 
 def test_training_dataset_repository_updates_and_disables_idempotently(

@@ -121,7 +121,15 @@ class TrainingDataset(Base):
         UniqueConstraint(
             "root_alias", "directory", name="uq_training_dataset_root_directory"
         ),
+        UniqueConstraint(
+            "root_dataset_id", "version", name="uq_training_dataset_root_version"
+        ),
+        CheckConstraint("version > 0", name="version_positive"),
+        CheckConstraint("revision >= 0", name="revision_nonnegative"),
+        CheckConstraint("status IN ('editing','published')", name="status"),
         Index("ix_training_dataset_enabled", "enabled"),
+        Index("ix_training_dataset_status", "status"),
+        Index("ix_training_dataset_root_version", "root_dataset_id", "version"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -135,9 +143,62 @@ class TrainingDataset(Base):
     enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("1")
     )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("('published')")
+    )
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("training_dataset.id", ondelete="RESTRICT")
+    )
+    root_dataset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("training_dataset.id", ondelete="RESTRICT")
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    published_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    manifest_digest: Mapped[str | None] = mapped_column(String(64))
     created_by: Mapped[int] = mapped_column(
         ForeignKey("user.id", ondelete="RESTRICT"), nullable=False
     )
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
+class TrainingDatasetImage(Base):
+    __tablename__ = "training_dataset_image"
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_id", "split", "image_key",
+            name="uq_training_dataset_image_key",
+        ),
+        CheckConstraint("split IN ('train','val','test')", name="split"),
+        CheckConstraint(
+            "review_status IN ('pending_annotation','annotated','confirmed_empty')",
+            name="review_status",
+        ),
+        CheckConstraint("width > 0 AND height > 0", name="dimensions_positive"),
+        CheckConstraint("revision >= 0", name="revision_nonnegative"),
+        Index("ix_training_dataset_image_filter", "dataset_id", "split", "review_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    dataset_id: Mapped[int] = mapped_column(
+        ForeignKey("training_dataset.id", ondelete="CASCADE"), nullable=False
+    )
+    split: Mapped[str] = mapped_column(Text, nullable=False)
+    image_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    review_status: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("('pending_annotation')")
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    content_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    validation_code: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP")
     )
