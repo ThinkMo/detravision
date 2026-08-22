@@ -258,6 +258,35 @@ class TrainingDatasetRepository:
             session.delete(row)
             return True
 
+    def update_editing_dataset(
+        self, dataset_id: int, expected_revision: int, values: Mapping[str, object]
+    ) -> dict[str, Any]:
+        allowed = {"classes", "name"}
+        normalized = {key: value for key, value in values.items() if key in allowed}
+        if "classes" in normalized:
+            normalized["classes"] = json.dumps(
+                list(normalized["classes"]), ensure_ascii=False, separators=(",", ":")
+            )
+        with self._session_factory.begin() as session:
+            result = session.execute(
+                update(TrainingDataset)
+                .where(
+                    TrainingDataset.id == dataset_id,
+                    TrainingDataset.status == "editing",
+                    TrainingDataset.revision == expected_revision,
+                )
+                .values(
+                    **normalized, revision=expected_revision + 1,
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            if result.rowcount != 1:
+                raise TrainingDatasetConflictError("dataset revision conflict")
+            row = session.get(TrainingDataset, dataset_id)
+            if row is None:
+                raise TrainingDatasetConflictError("dataset missing")
+            return _dataset_dict(row)
+
     def update(
         self, dataset_id: int, values: Mapping[str, object]
     ) -> dict[str, Any] | None:

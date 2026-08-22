@@ -110,6 +110,33 @@ class DatasetFilesystem:
                 ))
         return rows
 
+    def resolve_image(
+        self, dataset: Mapping[str, object], split: str, image_key: str
+    ) -> Path:
+        return self._resolve_item(dataset, split, image_key, labels=False)
+
+    def resolve_label(
+        self, dataset: Mapping[str, object], split: str, image_key: str
+    ) -> Path:
+        return self._resolve_item(dataset, split, image_key, labels=True)
+
+    def _resolve_item(
+        self, dataset: Mapping[str, object], split: str, image_key: str, *, labels: bool
+    ) -> Path:
+        if split not in {"train", "val", "test"}:
+            raise DatasetFilesystemError("invalid dataset split")
+        key = self._relative(image_key)
+        relative = self._relative(str(dataset[f"{split}_split"]))
+        parts = list(PurePosixPath(relative).parts)
+        if labels:
+            try:
+                parts[parts.index("images")] = "labels"
+            except ValueError as exc:
+                raise DatasetFilesystemError("invalid image split") from exc
+            key = str(PurePosixPath(key).with_suffix(".txt"))
+        root = self.root(str(dataset["root_alias"]))
+        return self._contained(root, self.dataset_path(dataset).joinpath(*parts, *PurePosixPath(key).parts))
+
     @staticmethod
     def _sha256(path: Path) -> str:
         digest = hashlib.sha256()
