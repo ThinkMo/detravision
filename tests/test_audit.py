@@ -14,7 +14,9 @@ from backend.db import Repository
 from backend.db.migrate import run_migrations
 from backend.db.models import AuditLog, User
 from backend.db.session import create_engine_from_url, create_session_factory
+from backend.engine import DetectorProvider
 from backend.main import app
+from backend.model_activation import ModelActivationService
 from backend.ws import EventHub
 
 
@@ -54,6 +56,16 @@ def audit_app(tmp_path):
     app.state.repository = repository
     app.state.cookie_secure = False
     app.state.hub = EventHub()
+
+    class FakeDetector:
+        def predict(self, _image):
+            return []
+
+    app.state.model_activation_service = ModelActivationService(
+        repository,
+        DetectorProvider(FakeDetector(), model_version_id=None),
+        detector_builder=lambda _path: FakeDetector(),
+    )
     try:
         yield app, auth_service, session_factory, repository
     finally:

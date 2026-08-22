@@ -164,6 +164,7 @@ def request_body(method: str, path: str) -> dict[str, object] | None:
         ("GET", "/api/cameras", "user", 200),
         ("POST", "/api/cameras", "user", 403),
         ("GET", "/api/models", "user", 200),
+        ("GET", "/api/training/catalog", "user", 403),
         ("POST", "/api/models", "user", 403),
         ("PATCH", "/api/events/1", "user", 200),
         ("POST", "/api/cameras", "admin", 201),
@@ -191,6 +192,8 @@ def test_permission_matrix(
         ("GET", "/api/alarm-groups"),
         ("GET", "/api/events"),
         ("GET", "/api/models"),
+        ("GET", "/api/training/catalog"),
+        ("GET", "/api/training-jobs"),
         ("DELETE", "/api/cameras/1"),
     ],
 )

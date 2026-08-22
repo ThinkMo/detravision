@@ -139,3 +139,19 @@ class BatchJobPageResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class TrainingJobCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    executor: str = "local"
+    base_model: str
+    imgsz: Literal[640, 960] = 640
+    epochs: int = Field(default=100, ge=1, le=1000)
+    batch: Literal["1", "2", "4", "8", "auto"] = "auto"
+    device: Literal["auto", "cpu", "0"] = "auto"
+    patience: int = Field(default=50, ge=0, le=500)
+
+
+class TrainingModelRegister(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str | None = Field(default=None, min_length=1, max_length=200)

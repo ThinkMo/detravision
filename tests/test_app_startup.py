@@ -93,3 +93,52 @@ def test_production_startup_uses_pre_applied_migrations(
     login = asyncio.run(exercise_startup())
     assert login.status_code == 200
     assert login.json()["must_change_password"] is True
+
+
+def test_training_services_start_and_stop_with_application_lifespan(
+    app_factory: Callable[..., FastAPI],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeTrainingManager:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def start(self) -> bool:
+            calls.append("start")
+            return True
+
+        def stop(self) -> bool:
+            calls.append("stop")
+            return True
+
+        def wake(self) -> None:
+            pass
+
+    monkeypatch.setattr(main_module, "LocalTrainingManager", FakeTrainingManager)
+    dataset = tmp_path / "dataset.yaml"
+    dataset.write_text(
+        "train: train\nval: val\ntest: test\nnames: [helmet, no_helmet]\n",
+        encoding="utf-8",
+    )
+    app = app_factory(
+        database_url="sqlite:///" + (tmp_path / "training-startup.db").as_posix(),
+        training_dataset_yaml=dataset,
+        training_run_dir=tmp_path / "training-runs",
+        training_model_cache_dir=tmp_path / "training-models",
+    )
+
+    async def exercise_startup() -> None:
+        with pytest.raises(RuntimeError, match="lifespan test"):
+            async with app.router.lifespan_context(app):
+                assert app.state.training_repository is not None
+                assert app.state.training_storage is not None
+                assert app.state.training_service is not None
+                assert app.state.training_manager is not None
+                assert app.state.model_activation_service is not None
+                raise RuntimeError("lifespan test")
+
+    asyncio.run(exercise_startup())
+    assert calls == ["start", "stop"]

@@ -121,7 +121,8 @@ class TrainingStorage:
         for configured_path in sorted(configured_paths, key=len, reverse=True):
             if configured_path:
                 scrubbed = re.sub(
-                    re.escape(configured_path),
+                    re.escape(configured_path)
+                    + r"(?:[\\/][^\r\n\t\s'\"<>|]*)*",
                     "[redacted]",
                     scrubbed,
                     flags=re.IGNORECASE,

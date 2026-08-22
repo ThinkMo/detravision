@@ -17,6 +17,7 @@ from backend.api.dashboard_routes import router as dashboard_router
 from backend.api.media_routes import router as media_router
 from backend.api.routes import router
 from backend.api.site_routes import router as site_router
+from backend.api.training_routes import router as training_router
 from backend.api.user_routes import router as user_router
 from backend.audit import AuditService
 from backend.auth import AuthenticatedUser, AuthService
@@ -31,6 +32,8 @@ from backend.engine import DetectorProvider, build_detector
 from backend.model_activation import ModelActivationService
 from backend.pipeline import RuntimeManager
 from backend.storage import LocalFileStorage
+from backend.training import LocalTrainingManager, TrainingRepository, TrainingService
+from backend.training.storage import TrainingStorage
 from backend.web import mount_frontend
 from backend.ws import EventHub
 
@@ -80,6 +83,20 @@ def application_lifespan(app_settings: Settings):
             detector_provider,
             runtime=runtime,
         )
+        training_repository = TrainingRepository(session_factory)
+        training_storage = TrainingStorage(app_settings)
+        training_manager = LocalTrainingManager(
+            training_repository,
+            training_storage,
+            stop_timeout_seconds=app_settings.training_stop_timeout_seconds,
+        )
+        training_service = TrainingService(
+            training_repository,
+            training_storage,
+            repository,
+            training_manager,
+            app_settings,
+        )
         app.state.settings = app_settings
         app.state.repository = repository
         app.state.session_factory = session_factory
@@ -95,14 +112,23 @@ def application_lifespan(app_settings: Settings):
         app.state.retention_cleaner = retention_cleaner
         app.state.runtime = runtime
         app.state.model_activation_service = model_activation_service
+        app.state.training_repository = training_repository
+        app.state.training_storage = training_storage
+        app.state.training_manager = training_manager
+        app.state.training_service = training_service
         runtime_started = False
         try:
             await runtime.start()
             runtime_started = True
             batch_worker.start()
             retention_cleaner.start()
+            if app_settings.training_enabled and not training_manager.start():
+                logging.getLogger(__name__).warning(
+                    "local_training_manager_unavailable"
+                )
             yield
         finally:
+            training_manager.stop()
             batch_worker.stop()
             retention_cleaner.stop()
             if runtime_started:
@@ -173,6 +199,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     application.include_router(site_router)
     application.include_router(dashboard_router)
     application.include_router(media_router)
+    application.include_router(training_router)
     application.add_api_websocket_route("/ws/events", event_stream)
     application.add_api_websocket_route("/ws/live/{camera_id}", live_stream)
     mount_frontend(application, FRONTEND_DIST_DIR)
