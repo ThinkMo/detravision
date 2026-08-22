@@ -448,6 +448,22 @@ def test_worker_launch_uses_project_root_even_when_service_cwd_changes(
         manager.stop()
 
 
+def test_child_environment_resolves_a_safe_user_without_posix_pwd():
+    """Catches Windows getpass falling back to the unavailable POSIX pwd module."""
+    completed = subprocess.run(
+        [sys.executable, "-c", "import getpass; print(getpass.getuser())"],
+        cwd=str(Path(__file__).resolve().parents[1]),
+        env=LocalTrainingManager._child_environment(),
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "training-worker"
+
+
 @pytest.mark.parametrize("artifact", ["progress", "result"])
 def test_manager_bounds_structured_artifacts_to_one_megabyte(
     manager_context, artifact: str

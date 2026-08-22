@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Clock3, Images } from "lucide-react";
+import { ChevronLeft, ChevronRight, Clock3, Images, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { BatchJob, BatchJobPage, BatchJobStatus } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
@@ -67,5 +67,5 @@ export function JobList({
 function JobRow({ job, admin, onDelete }: { job: BatchJob; admin: boolean; onDelete: (job: BatchJob) => void }) {
   const status = batchStatus(job.status);
   const terminal = !["queued", "processing"].includes(job.status);
-  return <li><Link to={`/batch/${job.id}`} aria-label={`查看识别任务 #${job.id}`}><span className="batch-job__icon"><Images aria-hidden="true" size={19} /></span><span className="batch-job__identity"><strong>任务 #{job.id}</strong><small>{admin ? `用户 #${job.user_id} · ` : ""}<time dateTime={job.created_at}>{new Date(job.created_at).toLocaleString("zh-CN", { hour12: false })}</time></small></span><span className="batch-job__counts">{job.success_count + job.failure_count} / {job.image_total}<small>已处理</small></span><span className="batch-job__expiry"><Clock3 aria-hidden="true" size={14} />{new Date(job.expires_at).toLocaleDateString("zh-CN")} 到期</span><StatusBadge tone={status.tone}>{status.label}</StatusBadge></Link>{terminal ? <button type="button" className="batch-job__delete" aria-label={`删除识别任务 #${job.id}`} onClick={() => onDelete(job)}>删除</button> : null}</li>;
+  return <li><Link to={`/batch/${job.id}`} aria-label={`查看识别任务 #${job.id}`}><span className="batch-job__icon"><Images aria-hidden="true" size={19} /></span><span className="batch-job__identity"><strong>任务 #{job.id}</strong><small>{admin ? `用户 #${job.user_id} · ` : ""}<time dateTime={job.created_at}>{new Date(job.created_at).toLocaleString("zh-CN", { hour12: false })}</time></small></span><span className="batch-job__counts">{job.success_count + job.failure_count} / {job.image_total}<small>已处理</small></span><span className="batch-job__expiry"><Clock3 aria-hidden="true" size={14} />{new Date(job.expires_at).toLocaleDateString("zh-CN")} 到期</span></Link><span className="batch-job__actions" role="group" aria-label={`任务 #${job.id} 状态与操作`}><StatusBadge tone={status.tone}>{status.label}</StatusBadge>{terminal ? <button type="button" className="batch-job__delete" aria-label={`删除识别任务 #${job.id}`} onClick={() => onDelete(job)}><Trash2 aria-hidden="true" size={14} />删除</button> : null}</span></li>;
 }

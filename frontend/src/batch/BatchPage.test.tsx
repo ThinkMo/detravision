@@ -364,7 +364,9 @@ it("confirms and deletes a terminal recognition task", async () => {
   }));
 
   renderBatch();
-  await userEvent.click(await screen.findByRole("button", { name: "删除识别任务 #12" }));
+  const actions = await screen.findByRole("group", { name: "任务 #12 状态与操作" });
+  expect(within(actions).getByText("部分失败")).toBeInTheDocument();
+  await userEvent.click(within(actions).getByRole("button", { name: "删除识别任务 #12" }));
   const dialog = screen.getByRole("dialog", { name: "删除识别任务" });
   await userEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
   await screen.findByText("当前筛选条件下没有识别任务");

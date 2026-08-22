@@ -456,7 +456,11 @@ class LocalTrainingManager:
     @staticmethod
     def _child_environment() -> dict[str, str]:
         environment = {key: value for key in _CHILD_ENV_KEYS if (value := os.environ.get(key))}
-        environment.update(PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+        environment.update(
+            PYTHONIOENCODING="utf-8",
+            PYTHONUNBUFFERED="1",
+            USER="training-worker",
+        )
         return environment
 
     @staticmethod

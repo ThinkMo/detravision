@@ -51,9 +51,20 @@
 .admin-pagination { display: flex; align-items: center; justify-content: flex-end; gap: .75rem; }
 .training-jobs, .training-job-list { display: grid; gap: 1rem; }
 .training-datasets { display: grid; gap: 1rem; }
-.training-directory-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
 .training-dataset-dialog { width: min(94vw, 42rem); max-height: 92vh; overflow: auto; }
 .training-directory-path { word-break: break-all; }
+.training-directory-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .6rem; }
+.training-directory-field button { padding: .55rem .8rem; color: #fff; border: 0; border-radius: var(--radius-sm); background: var(--color-safe); font-weight: 700; }
+.server-directory-dialog { width: min(94vw, 54rem); }
+.server-directory-toolbar { display: flex; align-items: center; gap: .8rem; margin-bottom: 1rem; }
+.server-directory-toolbar button { display: inline-flex; align-items: center; gap: .35rem; white-space: nowrap; }
+.server-directory-breadcrumb { min-width: 0; overflow: hidden; color: var(--color-text-muted); text-overflow: ellipsis; white-space: nowrap; }
+.server-directory-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); align-content: start; gap: .65rem; min-height: 18rem; max-height: 54vh; overflow: auto; padding: .8rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: #f7f9f8; }
+.server-directory-list > [role="listitem"] { min-width: 0; }
+.server-directory-list > [role="listitem"] > button { display: flex; align-items: center; gap: .6rem; width: 100%; min-height: 3.2rem; padding: .65rem .75rem; overflow: hidden; color: var(--color-text); text-align: left; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: #fff; cursor: pointer; }
+.server-directory-list > [role="listitem"] > button:hover, .server-directory-list > [role="listitem"] > button:focus-visible { color: #08715e; border-color: #8fd2c4; background: #eefaf7; }
+.server-directory-list > [role="listitem"] > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-directory-dialog footer button:last-child { display: inline-flex; align-items: center; gap: .35rem; }
 .training-job-list { grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); }
 .training-job-card { display: grid; gap: .85rem; padding: 1rem; border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: #fff; box-shadow: var(--shadow-sm); }
 .training-job-card > header, .training-job-card > header > div { display: flex; align-items: center; justify-content: space-between; gap: .65rem; }
