@@ -371,6 +371,40 @@ to Chinese messages and directs administrators to the bounded task log for the
 diagnostic category. Existing English fallback messages are not shown as the primary
 UI error.
 
+### Recognition-job and training-job deletion
+
+Deletion is an explicit audited operation, separate from retention cleanup.
+
+- `DELETE /api/batch-jobs/{id}` lets an authenticated owner delete their own
+  terminal recognition job; an administrator may delete any terminal recognition
+  job. Terminal recognition states are `completed`, `partial_failed`, and `failed`.
+  Jobs in `queued` or `processing` return HTTP 409 `job_active`; this revision does
+  not add batch cancellation, so the user waits for the short batch job to finish.
+- `DELETE /api/training-jobs/{id}` is administrator-only. Training jobs in
+  `queued`, `running`, `evaluating`, or `stopping` return HTTP 409 `job_active`.
+  A queued/running training job must first use the existing stop operation and reach
+  `cancelled`, `stopped`, `interrupted`, `completed`, or `failed`.
+- A training job referenced by any registered `ModelVersion` returns HTTP 409
+  `model_registered`, including when that model is inactive. The model version must
+  be removed through model-management policy before its provenance task can be
+  deleted; the existing `ON DELETE SET NULL` foreign key is not used to bypass this
+  service invariant.
+- Each repository locks and re-reads the parent task before cleanup. Batch deletion
+  uses the existing parent-first batch lock order and reuses the retention cleanup
+  contract. Training deletion verifies that the local manager does not own the job
+  and that no registered model references it.
+- Contained source/result images, generated ZIPs, logs, manifests, progress/results,
+  checkpoints, plots, and the exact opaque run directory are removed before the
+  database row. Missing files are idempotent success. If any file cannot be removed,
+  the database row remains and the API returns HTTP 503 `cleanup_failed`, so the
+  administrator can retry without creating an untracked partial database deletion.
+- If filesystem cleanup succeeds but the database transaction fails, the row is
+  retained and retry treats already-missing files as success. Public errors and
+  audit details contain only task IDs, actor IDs, stable codes, and outcomes.
+- Batch list/detail and training list/detail show a destructive confirmation dialog
+  only when deletion is permitted. Failure remains in the dialog as a `role=alert`;
+  success removes list/detail caches and returns to the appropriate task list.
+
 ### Focused verification
 
 Implementation follows TDD and, per the current delivery boundary, runs focused
@@ -379,8 +413,10 @@ Coverage includes authorized-root parsing, bounded directory browsing, path and
 symlink containment, dataset CRUD/reference protection, split/class validation,
 legacy default selection, job-local YAML snapshotting, resume inheritance,
 unavailable model rejection, safe worker/manager diagnostics, Chinese error mapping,
-dataset-definition and selection UI, backend compile checks, frontend type checking,
-and the production frontend build.
+dataset-definition and selection UI, owner/admin deletion authorization, active-job
+conflicts, registered-model protection, idempotent contained cleanup, delete-dialog
+success/failure behavior, backend compile checks, frontend type checking, and the
+production frontend build.
 Real YOLO training, live MySQL, and browser end-to-end validation remain deferred.
 
 ### Addendum acceptance criteria
@@ -397,3 +433,8 @@ Real YOLO training, live MySQL, and browser end-to-end validation remain deferre
   launching a worker.
 - Worker startup/training failures provide a safe diagnostic category and a Chinese
   administrator-facing message without leaking paths or raw exceptions.
+- Owners can delete their terminal multi-image recognition jobs, administrators can
+  delete any terminal recognition job, and only administrators can delete terminal
+  unregistered training jobs.
+- Active jobs and registered-model provenance cannot be deleted, and cleanup failure
+  never removes the corresponding database row.
