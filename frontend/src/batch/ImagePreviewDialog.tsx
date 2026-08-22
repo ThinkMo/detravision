@@ -54,15 +54,15 @@ export function ImagePreviewDialog({ src, name, onClose }: { src: string; name: 
   const imageStyle = typeof zoom === "number" ? { width: `${zoom * 100}%` } : undefined;
 
   return (
-    <ModalDialog title={`${name} 标注结果预览`} className="batch-preview-dialog" onClose={onClose}>
+    <ModalDialog title={`${name} 标注结果预览`} className="batch-preview-dialog" fullscreen onClose={onClose}>
       <div className="batch-preview-dialog__toolbar" aria-label="图片缩放工具">
         <button type="button" aria-label="缩小图片" disabled={typeof zoom === "number" && zoom <= MIN_ZOOM} onClick={() => changeZoom(-ZOOM_STEP)}><ZoomOut aria-hidden="true" size={18} /></button>
         <span role="status" aria-live="polite">{zoomLabel}</span>
         <button type="button" aria-label="放大图片" disabled={typeof zoom === "number" && zoom >= MAX_ZOOM} onClick={() => changeZoom(ZOOM_STEP)}><ZoomIn aria-hidden="true" size={18} /></button>
         <button type="button" aria-label="适应窗口" onClick={() => setZoom("fit")}><Maximize2 aria-hidden="true" size={18} /></button>
         <button type="button" aria-label="原始尺寸" onClick={() => setZoom("original")}><Scan aria-hidden="true" size={18} /></button>
-        <button className="batch-preview-dialog__close" type="button" aria-label="关闭预览" onClick={onClose}><X aria-hidden="true" size={20} /></button>
       </div>
+      <button className="batch-preview-dialog__close" type="button" aria-label="关闭预览" onClick={onClose}><X aria-hidden="true" size={20} /></button>
       <div
         className="batch-preview-dialog__viewport"
         role="region"

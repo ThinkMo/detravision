@@ -11,7 +11,7 @@ export function AdminNotice({ message, error = false }: { message: string; error
 
 const focusableSelector = "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])";
 
-export function ModalDialog({ title, children, onClose, className = "" }: { title: string; children: ReactNode; onClose: () => void; className?: string }) {
+export function ModalDialog({ title, children, onClose, className = "", fullscreen = false }: { title: string; children: ReactNode; onClose: () => void; className?: string; fullscreen?: boolean }) {
   const dialogRef = useRef<HTMLElement | null>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
   const titleId = useId();
@@ -58,7 +58,16 @@ export function ModalDialog({ title, children, onClose, className = "" }: { titl
 
   return createPortal(
     <div className="admin-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <section ref={dialogRef} className={`admin-dialog${className ? ` ${className}` : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onKeyDown={onKeyDown}>
+      <section
+        ref={dialogRef}
+        className={`admin-dialog${className ? ` ${className}` : ""}`}
+        style={fullscreen ? { position: "fixed", inset: 0, width: "100vw", height: "100vh", maxWidth: "none", maxHeight: "none", borderRadius: 0 } : undefined}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        onKeyDown={onKeyDown}
+      >
         <h2 id={titleId}>{title}</h2>
         {children}
       </section>

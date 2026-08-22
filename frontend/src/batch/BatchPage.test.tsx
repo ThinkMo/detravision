@@ -309,6 +309,15 @@ it("opens an enlarged annotated preview and does not offer downloads", async () 
   const previewTrigger = within(card).getByRole("button", { name: "放大预览 north-gate.jpg 标注结果" });
   await userEvent.click(previewTrigger);
   const dialog = screen.getByRole("dialog", { name: "north-gate.jpg 标注结果预览" });
+  expect(dialog).toHaveStyle({
+    position: "fixed",
+    inset: "0",
+    width: "100vw",
+    height: "100vh",
+    maxWidth: "none",
+    maxHeight: "none",
+    borderRadius: "0",
+  });
   expect(within(dialog).getByRole("img", { name: "north-gate.jpg 放大标注结果" })).toHaveAttribute(
     "src",
     "/api/batch-jobs/12/images/31/preview",
