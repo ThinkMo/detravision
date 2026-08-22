@@ -1,9 +1,9 @@
-import { Image as ImageIcon, X } from "lucide-react";
+import { Image as ImageIcon } from "lucide-react";
 import { useState } from "react";
 import type { BatchImageResult } from "../api/types";
-import { ModalDialog } from "../admin/shared";
 import { StatusBadge } from "../components/StatusBadge";
 import { safePreviewUrl } from "./batchApi";
+import { ImagePreviewDialog } from "./ImagePreviewDialog";
 
 const detectionLabels: Record<string, string> = {
   helmet_worn: "已佩戴安全帽",
@@ -38,7 +38,7 @@ export function ResultCard({ jobId, image }: { jobId: number; image: BatchImageR
           {!image.detections.length ? <p className="batch-result__empty">未检测到目标</p> : null}
         </> : null}
       </div>
-      {enlarged && previewSrc ? <ModalDialog title={`${image.display_name} 标注结果预览`} className="batch-preview-dialog" onClose={() => setEnlarged(false)}><button className="batch-preview-dialog__close" type="button" aria-label="关闭预览" onClick={() => setEnlarged(false)}><X aria-hidden="true" size={20} /></button><img className="batch-preview-dialog__image" src={previewSrc} alt={`${image.display_name} 放大标注结果`} /></ModalDialog> : null}
+      {enlarged && previewSrc ? <ImagePreviewDialog src={previewSrc} name={image.display_name} onClose={() => setEnlarged(false)} /> : null}
     </article>
   );
 }

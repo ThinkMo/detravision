@@ -313,6 +313,25 @@ it("opens an enlarged annotated preview and does not offer downloads", async () 
     "src",
     "/api/batch-jobs/12/images/31/preview",
   );
+  const viewport = within(dialog).getByRole("region", { name: "可缩放图片预览" });
+  expect(within(dialog).getByRole("status")).toHaveTextContent("适应窗口");
+  await userEvent.click(within(dialog).getByRole("button", { name: "放大图片" }));
+  expect(within(dialog).getByRole("status")).toHaveTextContent("125%");
+  fireEvent.wheel(viewport, { deltaY: -100 });
+  expect(within(dialog).getByRole("status")).toHaveTextContent("150%");
+  Object.defineProperties(viewport, {
+    scrollLeft: { configurable: true, writable: true, value: 100 },
+    scrollTop: { configurable: true, writable: true, value: 80 },
+  });
+  fireEvent.mouseDown(viewport, { clientX: 100, clientY: 100 });
+  fireEvent.mouseMove(viewport, { clientX: 40, clientY: 30 });
+  fireEvent.mouseUp(viewport);
+  expect(viewport.scrollLeft).toBe(160);
+  expect(viewport.scrollTop).toBe(150);
+  await userEvent.click(within(dialog).getByRole("button", { name: "原始尺寸" }));
+  expect(within(dialog).getByRole("status")).toHaveTextContent("100%");
+  await userEvent.click(within(dialog).getByRole("button", { name: "适应窗口" }));
+  expect(within(dialog).getByRole("status")).toHaveTextContent("适应窗口");
   expect(screen.queryByRole("link", { name: /下载/ })).not.toBeInTheDocument();
   fireEvent.mouseDown(dialog.parentElement!);
   expect(dialog).not.toBeInTheDocument();
