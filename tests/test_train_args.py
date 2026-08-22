@@ -12,6 +12,7 @@ from training.train import (
     validate_kwargs,
 )
 from training.train import configure_runtime, execute, format_validation_metrics, main
+from training.contracts import extract_metrics
 
 
 class FakeYOLO:
@@ -215,6 +216,17 @@ def test_validation_summary_maps_sparse_class_metrics_to_configured_class_ids():
     assert "helmet: mAP50=0.9200, mAP50-95=0.5000" in summary
     assert "no_helmet: mAP50=0.2400, mAP50-95=0.0900" in summary
     assert "person:" not in summary
+
+
+def test_cli_metric_summary_reuses_structured_metric_extraction():
+    """Catches CLI output drifting from worker metric class-index handling."""
+    metrics = FakeYOLO("unused").val()
+
+    extracted = extract_metrics(metrics)
+    summary = format_validation_metrics(metrics)
+
+    assert extracted["classes"]["no_helmet"]["map50"] == 0.24
+    assert "no_helmet: mAP50=0.2400, mAP50-95=0.0900" in summary
 
 
 def test_main_uses_argparse_exit_code_for_missing_checkpoint(tmp_path):

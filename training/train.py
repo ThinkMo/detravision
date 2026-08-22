@@ -6,6 +6,8 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from training.contracts import extract_metrics
+
 
 DEFAULT_DATA = "training/configs/construction-ppe-helmet.yaml"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -122,26 +124,17 @@ def validate_local_paths(args: argparse.Namespace) -> None:
 
 
 def format_validation_metrics(metrics: object) -> str:
-    box = metrics.box
+    extracted = extract_metrics(metrics)
     lines = [
         "overall: "
-        f"precision={float(box.mp):.4f}, recall={float(box.mr):.4f}, "
-        f"mAP50={float(box.map50):.4f}, mAP50-95={float(box.map):.4f}"
+        f"precision={extracted['precision']:.4f}, recall={extracted['recall']:.4f}, "
+        f"mAP50={extracted['map50']:.4f}, mAP50-95={extracted['map50_95']:.4f}"
     ]
-    ap50 = getattr(box, "ap50", None)
-    maps = getattr(box, "maps", None)
-    ap = getattr(box, "ap", None)
-    if ap50 is None or (maps is None and ap is None):
-        return "\n".join(lines)
-    names = getattr(metrics, "names", {})
-    class_ids = getattr(box, "ap_class_index", None)
-    if class_ids is None:
-        class_ids = range(len(ap50))
-    for result_index, (class_id, map50) in enumerate(zip(class_ids, ap50)):
-        class_id = int(class_id)
-        map5095 = maps[class_id] if maps is not None else ap[result_index]
-        name = names.get(class_id, str(class_id)) if hasattr(names, "get") else names[class_id]
-        lines.append(f"{name}: mAP50={float(map50):.4f}, mAP50-95={float(map5095):.4f}")
+    for name, class_metrics in extracted["classes"].items():
+        lines.append(
+            f"{name}: mAP50={class_metrics['map50']:.4f}, "
+            f"mAP50-95={class_metrics['map50_95']:.4f}"
+        )
     return "\n".join(lines)
 
 

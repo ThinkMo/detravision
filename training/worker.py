@@ -1,0 +1,263 @@
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import sys
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
+from pathlib import Path
+
+from training.contracts import (
+    TrainingManifest,
+    TrainingProgress,
+    TrainingResult,
+    atomic_write_json,
+    extract_metrics,
+    meets_acceptance,
+)
+from training.train import PROJECT_ROOT, configure_runtime, resolve_device
+
+
+ERROR_MESSAGES = {
+    "cuda_oom": "GPU memory is insufficient for this training configuration.",
+    "dataset_invalid": "The configured training dataset is unavailable or invalid.",
+    "weights_unavailable": "The selected base-model weights are unavailable.",
+    "evaluation_failed": "Held-out test evaluation failed.",
+    "training_failed": "Training did not produce a valid model.",
+}
+
+
+@contextmanager
+def _working_directory(path: Path):
+    previous = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
+def _contained(path: Path, root: Path) -> Path:
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(root.resolve())
+    except ValueError as exc:
+        raise ValueError("training artifact escaped run directory") from exc
+    return resolved
+
+
+def _batch(value: str) -> int:
+    return -1 if value == "auto" else int(value)
+
+
+def _progress_metrics(raw_metrics: object) -> dict[str, float]:
+    if not isinstance(raw_metrics, Mapping):
+        return {}
+    aliases = {
+        "metrics/precision(B)": "precision",
+        "metrics/recall(B)": "recall",
+        "metrics/mAP50(B)": "map50",
+        "metrics/mAP50-95(B)": "map50_95",
+    }
+    normalized: dict[str, float] = {}
+    for source, target in aliases.items():
+        value = raw_metrics.get(source)
+        if value is None:
+            continue
+        try:
+            normalized[target] = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+    return normalized
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _copy_canonical_weights(run_dir: Path) -> Path:
+    source_weights = _contained(run_dir / "train" / "weights", run_dir)
+    source_best = _contained(source_weights / "best.pt", run_dir)
+    if not source_best.is_file():
+        raise FileNotFoundError("best checkpoint unavailable")
+    destination_weights = _contained(run_dir / "weights", run_dir)
+    destination_weights.mkdir(parents=True, exist_ok=True)
+    destination_best = _contained(destination_weights / "best.pt", run_dir)
+    shutil.copy2(source_best, destination_best)
+    source_last = _contained(source_weights / "last.pt", run_dir)
+    if source_last.is_file():
+        shutil.copy2(source_last, _contained(destination_weights / "last.pt", run_dir))
+    return destination_best
+
+
+def _base_model_reference(
+    manifest: TrainingManifest, project_root: Path, model_cache_dir: Path
+) -> str:
+    for candidate in (
+        model_cache_dir / manifest.base_model,
+        project_root / manifest.base_model,
+    ):
+        if candidate.is_file():
+            return str(candidate.resolve())
+    return manifest.base_model
+
+
+def _write_failure(run_dir: Path, code: str) -> None:
+    result = TrainingResult(
+        status="failed",
+        metrics=None,
+        accepted=False,
+        best_sha256=None,
+        error_code=code,
+        error_message=ERROR_MESSAGES[code],
+    )
+    atomic_write_json(run_dir / "result.json", result.to_json())
+
+
+def _is_cuda_oom(exc: BaseException) -> bool:
+    text = str(exc).casefold()
+    return "cuda" in text and ("out of memory" in text or "memory" in text)
+
+
+def _is_dataset_error(exc: BaseException) -> bool:
+    text = str(exc).casefold()
+    return isinstance(exc, FileNotFoundError) or any(
+        marker in text for marker in ("dataset", "images not found", "data yaml")
+    )
+
+
+def run_manifest(
+    manifest: TrainingManifest,
+    *,
+    yolo_cls=None,
+    cuda_available: Callable[[], bool] | None = None,
+    project_root: Path = PROJECT_ROOT,
+) -> int:
+    run_dir = Path(manifest.run_dir).resolve()
+    model_cache_dir = Path(manifest.model_cache_dir).resolve()
+    dataset_yaml = Path(manifest.dataset_yaml).resolve()
+    if not run_dir.is_dir():
+        return 1
+    if not dataset_yaml.is_file():
+        _write_failure(run_dir, "dataset_invalid")
+        return 1
+    model_cache_dir.mkdir(parents=True, exist_ok=True)
+    configure_runtime(project_root)
+
+    with _working_directory(model_cache_dir):
+        if cuda_available is None:
+            import torch
+
+            cuda_available = torch.cuda.is_available
+        if yolo_cls is None:
+            from ultralytics import YOLO
+
+            yolo_cls = YOLO
+        device = resolve_device(manifest.device, cuda_available)
+        batch = _batch(manifest.batch)
+        try:
+            model = yolo_cls(
+                _base_model_reference(manifest, project_root.resolve(), model_cache_dir)
+            )
+        except Exception:
+            _write_failure(run_dir, "weights_unavailable")
+            return 1
+
+        def on_train_epoch_end(trainer) -> None:
+            progress = TrainingProgress(
+                current_epoch=min(int(trainer.epoch) + 1, manifest.epochs),
+                total_epochs=manifest.epochs,
+                metrics=_progress_metrics(getattr(trainer, "metrics", None)),
+            )
+            atomic_write_json(run_dir / "progress.json", progress.to_json())
+
+        model.add_callback("on_train_epoch_end", on_train_epoch_end)
+        try:
+            model.train(
+                data=manifest.dataset_yaml,
+                epochs=manifest.epochs,
+                imgsz=manifest.imgsz,
+                batch=batch,
+                device=device,
+                workers=0,
+                project=manifest.run_dir,
+                name="train",
+                exist_ok=True,
+                patience=manifest.patience,
+            )
+            best_path = _copy_canonical_weights(run_dir)
+        except Exception as exc:
+            if _is_cuda_oom(exc):
+                code = "cuda_oom"
+            elif _is_dataset_error(exc):
+                code = "dataset_invalid"
+            else:
+                code = "training_failed"
+            _write_failure(run_dir, code)
+            return 1
+
+        try:
+            evaluation_model = yolo_cls(str(best_path))
+            raw_metrics = evaluation_model.val(
+                data=manifest.dataset_yaml,
+                split="test",
+                imgsz=manifest.imgsz,
+                batch=batch,
+                device=device,
+                workers=0,
+            )
+            metrics = extract_metrics(raw_metrics)
+        except Exception as exc:
+            code = "cuda_oom" if _is_cuda_oom(exc) else "evaluation_failed"
+            _write_failure(run_dir, code)
+            return 1
+
+        result = TrainingResult(
+            status="completed",
+            metrics=metrics,
+            accepted=meets_acceptance(metrics),
+            best_sha256=_sha256(best_path),
+            error_code=None,
+            error_message=None,
+        )
+        atomic_write_json(run_dir / "result.json", result.to_json())
+        return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run a structured local YOLO training job")
+    parser.add_argument("--manifest", required=True, help="trusted training manifest")
+    return parser
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    yolo_cls=None,
+    cuda_available: Callable[[], bool] | None = None,
+    project_root: Path = PROJECT_ROOT,
+) -> int:
+    args = build_parser().parse_args(argv)
+    try:
+        payload = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+        manifest = TrainingManifest.from_json(payload)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        print("training manifest is invalid", file=sys.stderr)
+        return 1
+    return run_manifest(
+        manifest,
+        yolo_cls=yolo_cls,
+        cuda_available=cuda_available,
+        project_root=project_root,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
