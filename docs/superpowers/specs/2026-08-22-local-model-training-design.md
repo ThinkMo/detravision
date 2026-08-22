@@ -275,46 +275,76 @@ arbitrary filesystem access. This addendum replaces the single-dataset catalog
 assumption while retaining `TRAINING_DATASET_YAML` as the default selection for
 backward compatibility.
 
-### Dataset discovery and identity
+### Authorized roots and directory browsing
 
-- `TRAINING_DATASET_CONFIG_DIR` defaults to `training/configs` and is the only root
-  searched for selectable `.yaml` and `.yml` definitions.
-- `TRAINING_DATASET_ROOT` defaults to `datasets` and is the only root allowed for
-  referenced training, validation, and test data.
-- The server recursively scans bounded YAML files beneath the configuration root.
-  Neither YAML definitions nor their resolved split paths may escape their
-  respective roots through symlinks, Windows drive paths, UNC paths, or traversal
-  segments.
-- A dataset key is the normalized POSIX-style YAML path relative to
-  `TRAINING_DATASET_CONFIG_DIR`. Clients never submit an absolute path.
-- Discovery is bounded by YAML size and result count. An unreadable or invalid file
-  is returned as unavailable with a stable reason; raw parser errors and local paths
-  are not returned.
-- A selectable YAML must define non-empty `train`, `val`, and `test` splits and a
-  non-empty class mapping. Each split is resolved using Ultralytics dataset path
-  semantics and must stay within `TRAINING_DATASET_ROOT`; referenced split
-  directories/files must exist.
-- `TRAINING_DATASET_YAML` remains the default dataset when it resolves within the
-  configuration root and passes the same validation. It does not bypass containment
-  checks.
+`TRAINING_DATASET_ROOTS` configures one or more administrator-approved server roots.
+On Windows it uses semicolon-separated `alias=absolute-path` entries, for example
+`default=D:\datasets;customer=E:\customer-datasets`. Aliases are stable public
+identifiers; absolute paths never appear in API responses, audit data, or returned
+logs. Invalid aliases, duplicate aliases, non-absolute paths, missing directories,
+and roots nested beneath another configured root fail startup validation.
 
-The catalog dataset entry becomes a bounded list containing `key`, a display name
-derived from the relative path, class names, split availability, and an availability
-status. It contains no absolute paths or image counts that require an expensive
-full-directory scan.
+The admin-only directory browser accepts a root alias and a normalized relative
+directory. It returns only immediate child-directory names and relative identifiers,
+with a bounded result count. It never accepts or returns an absolute path, does not
+list files outside dataset configuration needs, and rejects traversal, drive, UNC,
+device, and resolved symlink escapes. Root selection and each navigation step are
+revalidated server-side rather than trusted from the browser.
+
+`TRAINING_DATASET_YAML` remains a backward-compatible, read-only default dataset.
+Its YAML and split targets must pass the same containment checks against one of the
+authorized roots. It cannot grant access to an otherwise unauthorized location.
+
+### Persisted dataset definitions
+
+A migration adds a `training_dataset` table with an administrator-visible name,
+opaque root alias, relative dataset directory, relative `train`/`val`/`test` split
+paths, ordered class-name JSON stored as `Text`, enabled status, creator, and
+timestamps. The combination of root alias and dataset directory is unique.
+
+Create and update operations accept only relative paths selected beneath an
+authorized root. Before persistence the service verifies that all three split
+directories exist, remain inside the selected dataset directory and authorized root,
+and contain the expected YOLO image/label directory structure. Class names must be
+non-empty, ordered, unique bounded strings. Definitions are soft-disabled instead
+of deleted while referenced by a training job.
+
+The catalog returns a bounded dataset list containing only `key`, display name,
+class names, split availability, enabled/available status, and safe reason codes.
+The legacy environment dataset appears as a read-only catalog entry when valid.
+No response performs an expensive image count or exposes a root's absolute path.
+
+Admin endpoints added by this revision are:
+
+```text
+GET    /api/training/dataset-roots
+GET    /api/training/dataset-directories
+GET    /api/training/datasets
+POST   /api/training/datasets
+PATCH  /api/training/datasets/{id}
+DELETE /api/training/datasets/{id}
+```
+
+They require administrator authorization, same-origin protection for mutations,
+stable conflict/validation codes, and path-free audit records.
 
 ### Per-job selection and snapshot
 
 `POST /api/training-jobs` requires a `dataset_key`. The service resolves that key
-against the current discovery catalog and revalidates it in the same transaction
-boundary used to create the job manifest. It snapshots the normalized key, class
-list, and validated server YAML reference. A queued or running job therefore keeps
-its original manifest if the catalog changes later; resume inherits the source
-job's dataset snapshot and does not silently switch datasets.
+against the current persisted/legacy catalog and revalidates the definition in the
+same transaction boundary used to create the job manifest. It writes an immutable,
+contained job-local YAML using the selected root, relative splits, and ordered class
+snapshot. The worker receives only this server-generated YAML. A queued or running
+job therefore keeps its original configuration if the dataset definition changes
+later; resume inherits the source job's snapshot and does not silently switch data.
 
-The create dialog shows a required dataset selector before model parameters. Each
-option displays its relative name and classes. Unavailable entries are disabled
-with a Chinese reason, and no task can be submitted without one available dataset.
+The model-management training tab adds a compact dataset-definition action and
+dialog. Administrators choose an authorized root alias, browse to a dataset
+directory, select relative train/validation/test subdirectories, enter ordered class
+names, and save only after server validation. The create-training dialog then shows
+a required dataset selector before model parameters. Unavailable entries are
+disabled with a Chinese reason, and no task can be submitted without one available
+dataset.
 
 ### Base-model availability
 
@@ -345,17 +375,20 @@ UI error.
 
 Implementation follows TDD and, per the current delivery boundary, runs focused
 unit and component tests rather than real training or full integration suites.
-Coverage includes discovery containment and limits, YAML/split validation, default
-selection, per-job snapshotting, resume inheritance, unavailable model rejection,
-safe worker/manager diagnostics, Chinese error mapping, dataset selection UI,
-backend compile checks, frontend type checking, and the production frontend build.
+Coverage includes authorized-root parsing, bounded directory browsing, path and
+symlink containment, dataset CRUD/reference protection, split/class validation,
+legacy default selection, job-local YAML snapshotting, resume inheritance,
+unavailable model rejection, safe worker/manager diagnostics, Chinese error mapping,
+dataset-definition and selection UI, backend compile checks, frontend type checking,
+and the production frontend build.
 Real YOLO training, live MySQL, and browser end-to-end validation remain deferred.
 
 ### Addendum acceptance criteria
 
-- An administrator can choose one valid definition discovered under
-  `training/configs/` whose data resolves under `datasets/` for a new local training
-  task.
+- An administrator can define multiple datasets beneath configured server roots and
+  choose one for each new local training task.
+- The UI can browse authorized directories without exposing their absolute paths and
+  cannot navigate outside them.
 - Neither requests nor responses expose or accept an arbitrary server path.
 - Invalid, escaping, or missing dataset configurations cannot be queued.
 - The selected dataset and classes remain attributable to the job and its resume
