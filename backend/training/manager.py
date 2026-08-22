@@ -112,6 +112,7 @@ class LocalTrainingManager:
         self._thread: threading.Thread | None = None
         self._shutdown = False
         self._active: _ActiveProcess | None = None
+        self._quarantined = False
         self._local_lock = _LocalManagerLock(storage.root)
 
     def start(self) -> bool:
@@ -156,21 +157,22 @@ class LocalTrainingManager:
         try:
             self._run()
         finally:
-            try:
-                self._shutdown_active()
-            except BaseException:
-                if self._active is not None:
-                    self._clear_active(self._active)
-            self._local_lock.release()
+            if self._active is None:
+                self._local_lock.release()
             with self._condition:
                 self._condition.notify_all()
 
     def _run(self) -> None:
         while True:
             with self._condition:
-                if self._shutdown:
-                    return
+                shutting_down = self._shutdown
                 observed_generation = self._generation
+            if shutting_down:
+                if self._active is None:
+                    return
+                self._monitor_shutdown()
+                self._wait_for_change(observed_generation, bounded=True)
+                continue
             if self._active is None:
                 try:
                     job = self._repository.claim_next()
@@ -190,7 +192,9 @@ class LocalTrainingManager:
 
     def _wait_for_change(self, observed_generation: int, *, bounded: bool) -> None:
         with self._condition:
-            if self._shutdown or self._generation != observed_generation:
+            if self._generation != observed_generation:
+                return
+            if self._shutdown and not bounded:
                 return
             self._condition.wait(timeout=self._monitor_interval if bounded else None)
 
@@ -212,6 +216,7 @@ class LocalTrainingManager:
             )
             active = _ActiveProcess(job_id, run_key, process, log)
             self._active = active
+            self._quarantined = False
             self._repository.update_progress(job_id, current_epoch=int(job.get("current_epoch", 0)), pid=process.pid)
         except BaseException:
             if process is not None and log is not None:
@@ -234,9 +239,22 @@ class LocalTrainingManager:
             self._clear_active(active)
             return
         if job["status"] == "stopping" or job["stop_requested"]:
+            if self._quarantined:
+                if self._process_exited(active):
+                    if self._safe_mark_terminal(
+                        active.job_id,
+                        status="interrupted",
+                        has_best=self._artifact_exists(active.run_key, "best"),
+                        has_last=self._artifact_exists(active.run_key, "last"),
+                    ):
+                        self._clear_active(active)
+                return
             stopped = self._terminate(active)
+            if not stopped:
+                self._quarantined = True
+                return
             finalized = self._safe_mark_terminal(
-                active.job_id, status="stopped" if stopped else "interrupted",
+                active.job_id, status="stopped",
                 has_best=self._artifact_exists(active.run_key, "best"),
                 has_last=self._artifact_exists(active.run_key, "last"),
             )
@@ -309,17 +327,30 @@ class LocalTrainingManager:
         except Exception:
             return False
 
-    def _shutdown_active(self) -> None:
+    def _monitor_shutdown(self) -> None:
         active = self._active
         if active is None:
             return
-        self._terminate(active)
-        self._safe_mark_terminal(
+        if not self._quarantined:
+            if not self._terminate(active):
+                self._quarantined = True
+                return
+        elif not self._process_exited(active):
+            return
+        if not self._safe_mark_terminal(
             active.job_id, status="interrupted",
             has_best=self._artifact_exists(active.run_key, "best"),
             has_last=self._artifact_exists(active.run_key, "last"),
-        )
+        ):
+            return
         self._clear_active(active)
+
+    @staticmethod
+    def _process_exited(active: _ActiveProcess) -> bool:
+        try:
+            return active.process.poll() is not None
+        except Exception:
+            return False
 
     def _terminate(self, active: _ActiveProcess) -> bool:
         try:
@@ -350,6 +381,7 @@ class LocalTrainingManager:
         self._close_log(active.log)
         if self._active is active:
             self._active = None
+        self._quarantined = False
         self.wake()
 
     @staticmethod

@@ -159,6 +159,9 @@ class FaultyStopProcess(FakeProcess):
     def kill(self):
         if self.stage == "kill_error":
             raise OSError("kill failed")
+        if self.stage == "double_timeout":
+            self.killed = True
+            return
         super().kill()
 
 
@@ -434,6 +437,7 @@ def test_worker_launch_uses_project_root_even_when_service_cwd_changes(
     manager.start()
     try:
         wait_until(lambda: repository.get_job(job["id"])["status"] == "running")
+        wait_until(lambda: len(popen.calls) == 1)
         _args, kwargs, _process = popen.calls[0]
         assert kwargs["cwd"] == str(Path(__file__).resolve().parents[1])
         assert "API_TOKEN" not in kwargs["env"]
@@ -594,16 +598,16 @@ def test_stop_returns_false_when_scheduler_cannot_join(manager_context):
 
 
 @pytest.mark.parametrize(
-    ("stage", "terminal_status"),
+    ("stage", "kill_confirmed"),
     [
-        ("terminate_error", "stopped"),
-        ("wait_error", "stopped"),
-        ("kill_error", "interrupted"),
-        ("double_timeout", "interrupted"),
+        ("terminate_error", True),
+        ("wait_error", True),
+        ("kill_error", False),
+        ("double_timeout", False),
     ],
 )
 def test_stop_exceptions_keep_scheduler_alive_and_close_owned_log(
-    manager_context, stage: str, terminal_status: str
+    manager_context, stage: str, kill_confirmed: bool
 ):
     """Catches terminate/kill/wait failures escaping the scheduler lifecycle."""
     repository, storage, admin_id = manager_context
@@ -615,18 +619,37 @@ def test_stop_exceptions_keep_scheduler_alive_and_close_owned_log(
         storage,
         popen_factory=popen,
         stop_timeout_seconds=0.01,
+        join_timeout_seconds=0.02,
     )
     manager.start()
     try:
         wait_until(lambda: repository.get_job(job["id"])["status"] == "running")
         repository.request_stop(job["id"])
         manager.wake()
-        wait_until(
-            lambda: repository.get_job(job["id"])["status"] == terminal_status
-        )
-        assert popen.calls[0][1]["stdout"].closed is True
+        if kill_confirmed:
+            wait_until(lambda: repository.get_job(job["id"])["status"] == "stopped")
+            assert popen.calls[0][1]["stdout"].closed is True
+        else:
+            time.sleep(0.05)
+            assert repository.get_job(job["id"])["status"] == "stopping"
+            assert popen.calls[0][1]["stdout"].closed is False
+            contender = LocalTrainingManager(
+                repository, storage, popen_factory=PopenRecorder()
+            )
+            assert contender.start() is False
+            assert manager.stop() is False
+            process.finish(-9)
+            manager.wake()
+            wait_until(
+                lambda: repository.get_job(job["id"])["status"] == "interrupted"
+            )
+            assert manager.stop() is True
+            assert popen.calls[0][1]["stdout"].closed is True
+            assert contender.start() is True
+            assert contender.stop() is True
     finally:
-        assert manager.stop() is True
+        if kill_confirmed:
+            assert manager.stop() is True
 
 
 @pytest.mark.parametrize(
