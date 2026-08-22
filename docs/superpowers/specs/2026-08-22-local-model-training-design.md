@@ -267,3 +267,100 @@ README gains:
 - Remote training remains a clearly disabled placeholder.
 - Automated tests do not require network access or a GPU, and the existing regression suites remain green.
 
+## Addendum: server dataset selection and actionable failures
+
+The initial implementation accepts one server-configured dataset. The management
+console now needs to select a dataset per training job without allowing uploads or
+arbitrary filesystem access. This addendum replaces the single-dataset catalog
+assumption while retaining `TRAINING_DATASET_YAML` as the default selection for
+backward compatibility.
+
+### Dataset discovery and identity
+
+- `TRAINING_DATASET_CONFIG_DIR` defaults to `training/configs` and is the only root
+  searched for selectable `.yaml` and `.yml` definitions.
+- `TRAINING_DATASET_ROOT` defaults to `datasets` and is the only root allowed for
+  referenced training, validation, and test data.
+- The server recursively scans bounded YAML files beneath the configuration root.
+  Neither YAML definitions nor their resolved split paths may escape their
+  respective roots through symlinks, Windows drive paths, UNC paths, or traversal
+  segments.
+- A dataset key is the normalized POSIX-style YAML path relative to
+  `TRAINING_DATASET_CONFIG_DIR`. Clients never submit an absolute path.
+- Discovery is bounded by YAML size and result count. An unreadable or invalid file
+  is returned as unavailable with a stable reason; raw parser errors and local paths
+  are not returned.
+- A selectable YAML must define non-empty `train`, `val`, and `test` splits and a
+  non-empty class mapping. Each split is resolved using Ultralytics dataset path
+  semantics and must stay within `TRAINING_DATASET_ROOT`; referenced split
+  directories/files must exist.
+- `TRAINING_DATASET_YAML` remains the default dataset when it resolves within the
+  configuration root and passes the same validation. It does not bypass containment
+  checks.
+
+The catalog dataset entry becomes a bounded list containing `key`, a display name
+derived from the relative path, class names, split availability, and an availability
+status. It contains no absolute paths or image counts that require an expensive
+full-directory scan.
+
+### Per-job selection and snapshot
+
+`POST /api/training-jobs` requires a `dataset_key`. The service resolves that key
+against the current discovery catalog and revalidates it in the same transaction
+boundary used to create the job manifest. It snapshots the normalized key, class
+list, and validated server YAML reference. A queued or running job therefore keeps
+its original manifest if the catalog changes later; resume inherits the source
+job's dataset snapshot and does not silently switch datasets.
+
+The create dialog shows a required dataset selector before model parameters. Each
+option displays its relative name and classes. Unavailable entries are disabled
+with a Chinese reason, and no task can be submitted without one available dataset.
+
+### Base-model availability
+
+The model catalog reports whether each allowlisted checkpoint is already available
+in the project root or controlled model cache. The UI labels unavailable weights
+and defaults to the first locally available model. It does not promise that a
+network download will succeed. Selecting or submitting an unavailable checkpoint
+is rejected before a job is queued with the stable `weights_unavailable` code.
+
+This avoids a known failure mode where a worker starts only to discover that GitHub
+asset downloads are blocked. Administrators may provision an allowlisted checkpoint
+on the server and refresh the catalog.
+
+### Actionable and safe training diagnostics
+
+Worker failures retain stable public error codes. Before writing a failed result,
+the worker also appends one bounded structured diagnostic line to the task log with
+only the execution stage, exception class, and stable code. It never includes raw
+exception text, traceback source lines, environment values, or local paths.
+
+If a child exits without a valid result, the manager records a similarly bounded
+diagnostic containing the worker exit code and stage. The frontend maps stable codes
+to Chinese messages and directs administrators to the bounded task log for the
+diagnostic category. Existing English fallback messages are not shown as the primary
+UI error.
+
+### Focused verification
+
+Implementation follows TDD and, per the current delivery boundary, runs focused
+unit and component tests rather than real training or full integration suites.
+Coverage includes discovery containment and limits, YAML/split validation, default
+selection, per-job snapshotting, resume inheritance, unavailable model rejection,
+safe worker/manager diagnostics, Chinese error mapping, dataset selection UI,
+backend compile checks, frontend type checking, and the production frontend build.
+Real YOLO training, live MySQL, and browser end-to-end validation remain deferred.
+
+### Addendum acceptance criteria
+
+- An administrator can choose one valid definition discovered under
+  `training/configs/` whose data resolves under `datasets/` for a new local training
+  task.
+- Neither requests nor responses expose or accept an arbitrary server path.
+- Invalid, escaping, or missing dataset configurations cannot be queued.
+- The selected dataset and classes remain attributable to the job and its resume
+  attempts even if catalog files later change.
+- Missing local base weights are visible before submission and rejected without
+  launching a worker.
+- Worker startup/training failures provide a safe diagnostic category and a Chinese
+  administrator-facing message without leaking paths or raw exceptions.
