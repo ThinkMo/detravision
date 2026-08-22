@@ -143,10 +143,13 @@ describe("model training console", () => {
     await userEvent.click(await screen.findByRole("button", { name: "定义训练集" }));
     const dialog = await screen.findByRole("dialog", { name: "定义服务器训练集" });
     await userEvent.type(within(dialog).getByLabelText("训练集名称"), "现场 A");
+    const save = within(dialog).getByRole("button", { name: "保存训练集" });
+    expect(save).toBeEnabled();
+    await userEvent.click(save);
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("请先选择训练集目录");
     await userEvent.selectOptions(within(dialog).getByLabelText("服务器目录"), "site-a");
-    await userEvent.click(within(dialog).getByRole("button", { name: "进入目录" }));
-    await userEvent.click(within(dialog).getByRole("button", { name: "选择当前目录" }));
-    await userEvent.click(within(dialog).getByRole("button", { name: "保存训练集" }));
+    expect(within(dialog).getByText("已选：site-a")).toBeInTheDocument();
+    await userEvent.click(save);
     await waitFor(() => expect(created).toMatchObject({ root_alias: "primary", directory: "site-a" }));
     expect(JSON.stringify(created)).not.toContain("D:\\");
   });
