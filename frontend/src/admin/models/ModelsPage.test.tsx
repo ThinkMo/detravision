@@ -169,4 +169,23 @@ describe("model training console", () => {
     await userEvent.click(screen.getByRole("button", { name: "注册任务 10 模型" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("模型文件校验失败");
   });
+
+  it("confirms deletion of a terminal training task", async () => {
+    let deleted = false;
+    const terminal = { id: 21, executor: "local", base_model: "yolo11n.pt", imgsz: 640, epochs: 1, batch: "1", device: "cpu", patience: 0, status: "failed", current_epoch: 0, total_epochs: 1, has_last: false, has_best: false, accepted: false, metrics: null, error_code: "training_failed", error_message: null, created_at: "2026-08-22T00:00:00Z", updated_at: "2026-08-22T00:00:00Z" };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/models") return json([]);
+      if (path === "/api/training/catalog") return json(catalog);
+      if (path === "/api/training-jobs/21" && init?.method === "DELETE") { deleted = true; return new Response(null, { status: 204 }); }
+      if (path.startsWith("/api/training-jobs")) return json({ items: deleted ? [] : [terminal], total: deleted ? 0 : 1, page: 1, page_size: 20 });
+      throw new Error(`Unexpected request ${path}`);
+    }));
+
+    renderPage();
+    await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
+    await userEvent.click(await screen.findByRole("button", { name: "删除训练任务 21" }));
+    await userEvent.click(within(screen.getByRole("dialog", { name: "删除训练任务" })).getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(deleted).toBe(true));
+  });
 });

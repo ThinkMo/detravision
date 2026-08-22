@@ -352,6 +352,25 @@ it("opens an enlarged annotated preview and does not offer downloads", async () 
   expect(document.body).not.toHaveTextContent("batch-source");
 });
 
+it("confirms and deletes a terminal recognition task", async () => {
+  let deleted = false;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path === "/api/auth/me") return json(currentUser);
+    if (path.startsWith("/api/batch-jobs?") && !deleted) return json({ items: [partialFailedJob], total: 1, page: 1, page_size: 20 });
+    if (path.startsWith("/api/batch-jobs?") && deleted) return json({ items: [], total: 0, page: 1, page_size: 20 });
+    if (path === "/api/batch-jobs/12" && init?.method === "DELETE") { deleted = true; return new Response(null, { status: 204 }); }
+    throw new Error(`Unexpected request ${path}`);
+  }));
+
+  renderBatch();
+  await userEvent.click(await screen.findByRole("button", { name: "删除识别任务 #12" }));
+  const dialog = screen.getByRole("dialog", { name: "删除识别任务" });
+  await userEvent.click(within(dialog).getByRole("button", { name: "确认删除" }));
+  await screen.findByText("当前筛选条件下没有识别任务");
+  expect(deleted).toBe(true);
+});
+
 it("does not render an image for a non-canonical preview URL", () => {
   render(
     <ResultCard

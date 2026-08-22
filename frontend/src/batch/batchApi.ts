@@ -46,6 +46,10 @@ export function useBatchJob(jobId: number | null) {
   });
 }
 
+export function deleteBatchJob(jobId: number) {
+  return api.request<void>(`/api/batch-jobs/${jobId}`, { method: "DELETE" });
+}
+
 export function createBatchJob(files: File[], onProgress: (percent: number) => void): Promise<BatchJob> {
   const data = new FormData();
   files.forEach((file) => data.append("files", file, file.name));

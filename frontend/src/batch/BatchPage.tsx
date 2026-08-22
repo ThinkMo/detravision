@@ -2,7 +2,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
-import { createBatchJob, type BatchJobFilters, useBatchJob, useBatchJobs } from "./batchApi";
+import { createBatchJob, deleteBatchJob, type BatchJobFilters, useBatchJob, useBatchJobs } from "./batchApi";
+import type { BatchJob } from "../api/types";
+import { ConfirmDialog, errorMessage } from "../admin/shared";
 import { JobDetail } from "./JobDetail";
 import { JobList } from "./JobList";
 import { UploadDropzone } from "./UploadDropzone";
@@ -51,6 +53,7 @@ function BatchWorkspace() {
   const navigate = useNavigate();
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
+  const [deleting, setDeleting] = useState<BatchJob | null>(null);
   const upload = useMutation({
     mutationFn: (files: File[]) => {
       setError("");
@@ -64,13 +67,15 @@ function BatchWorkspace() {
     onError: (reason) => setError(reason instanceof Error ? reason.message : "上传失败，请重试"),
   });
   const updateFilters = (next: BatchJobFilters) => setSearch(filtersToSearch(next), { replace: true });
+  const remove = useMutation({ mutationFn: deleteBatchJob, onSuccess: async () => { setDeleting(null); await queryClient.invalidateQueries({ queryKey: ["batch-jobs"] }); } });
 
   return (
     <div className="batch-page">
       <header className="page-heading"><div><p>MULTI-IMAGE INFERENCE</p><h1>多图识别</h1><span>一次提交多张现场图片，集中查看模型识别结果</span></div></header>
       <UploadDropzone pending={upload.isPending} progress={progress} onSubmit={(files) => upload.mutate(files)} />
       {error ? <p className="batch-alert" role="alert">{error}</p> : null}
-      <JobList data={jobs.data} loading={jobs.isLoading} error={jobs.isError} admin={user?.role === "admin"} filters={filters} onFilters={updateFilters} onRetry={() => void jobs.refetch()} />
+      <JobList data={jobs.data} loading={jobs.isLoading} error={jobs.isError} admin={user?.role === "admin"} filters={filters} onFilters={updateFilters} onRetry={() => void jobs.refetch()} onDelete={(job) => { remove.reset(); setDeleting(job); }} />
+      {deleting ? <ConfirmDialog title="删除识别任务" confirmLabel="确认删除" pending={remove.isPending} error={remove.isError ? errorMessage(remove.error, "删除失败") : ""} onCancel={() => setDeleting(null)} onConfirm={() => remove.mutate(deleting.id)}><p>任务 #{deleting.id} 的原图、结果图和记录将被永久删除。</p></ConfirmDialog> : null}
     </div>
   );
 }

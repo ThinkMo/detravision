@@ -39,6 +39,7 @@ export const trainingApi = {
     body: JSON.stringify(value),
   }),
   stop: (id: number) => api.request<TrainingJob>(`/api/training-jobs/${id}/stop`, { method: "POST" }),
+  delete: (id: number) => api.request<void>(`/api/training-jobs/${id}`, { method: "DELETE" }),
   resume: (id: number, key = idempotencyKey()) => api.request<TrainingJob>(`/api/training-jobs/${id}/resume`, { method: "POST", headers: { "Idempotency-Key": key } }),
   register: (id: number, name?: string) => api.request<ModelVersion>(`/api/training-jobs/${id}/register-model`, {
     method: "POST",

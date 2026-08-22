@@ -30,6 +30,7 @@ export function JobList({
   filters,
   onFilters,
   onRetry,
+  onDelete,
 }: {
   data?: BatchJobPage;
   loading: boolean;
@@ -38,6 +39,7 @@ export function JobList({
   filters: BatchJobFilters;
   onFilters: (filters: BatchJobFilters) => void;
   onRetry: () => void;
+  onDelete: (job: BatchJob) => void;
 }) {
   if (loading) return <LoadingPanel label="正在加载识别任务" />;
   if (error || !data) return <ErrorPanel message="暂时无法读取识别任务" onRetry={onRetry} />;
@@ -52,7 +54,7 @@ export function JobList({
         <label>结束日期<input type="date" value={filters.createdTo ?? ""} onChange={(event) => onFilters({ ...filters, createdTo: event.target.value || undefined, page: 1 })} /></label>
         {admin ? <label>创建用户 ID<input inputMode="numeric" value={filters.userId ?? ""} onChange={(event) => onFilters({ ...filters, userId: event.target.value.replace(/\D/g, "") || undefined, page: 1 })} placeholder="全部用户" /></label> : null}
       </form>
-      {data.items.length === 0 ? <EmptyState message="当前筛选条件下没有识别任务" /> : <ul className="batch-jobs">{data.items.map((job) => <JobRow key={job.id} job={job} admin={admin} />)}</ul>}
+      {data.items.length === 0 ? <EmptyState message="当前筛选条件下没有识别任务" /> : <ul className="batch-jobs">{data.items.map((job) => <JobRow key={job.id} job={job} admin={admin} onDelete={onDelete} />)}</ul>}
       <nav className="batch-pagination" aria-label="识别任务分页">
         <button type="button" disabled={data.page <= 1} onClick={() => onFilters({ ...filters, page: data.page - 1 })}><ChevronLeft aria-hidden="true" size={16} />上一页</button>
         <span>第 {data.page} / {totalPages} 页</span>
@@ -62,7 +64,8 @@ export function JobList({
   );
 }
 
-function JobRow({ job, admin }: { job: BatchJob; admin: boolean }) {
+function JobRow({ job, admin, onDelete }: { job: BatchJob; admin: boolean; onDelete: (job: BatchJob) => void }) {
   const status = batchStatus(job.status);
-  return <li><Link to={`/batch/${job.id}`} aria-label={`查看识别任务 #${job.id}`}><span className="batch-job__icon"><Images aria-hidden="true" size={19} /></span><span className="batch-job__identity"><strong>任务 #{job.id}</strong><small>{admin ? `用户 #${job.user_id} · ` : ""}<time dateTime={job.created_at}>{new Date(job.created_at).toLocaleString("zh-CN", { hour12: false })}</time></small></span><span className="batch-job__counts">{job.success_count + job.failure_count} / {job.image_total}<small>已处理</small></span><span className="batch-job__expiry"><Clock3 aria-hidden="true" size={14} />{new Date(job.expires_at).toLocaleDateString("zh-CN")} 到期</span><StatusBadge tone={status.tone}>{status.label}</StatusBadge></Link></li>;
+  const terminal = !["queued", "processing"].includes(job.status);
+  return <li><Link to={`/batch/${job.id}`} aria-label={`查看识别任务 #${job.id}`}><span className="batch-job__icon"><Images aria-hidden="true" size={19} /></span><span className="batch-job__identity"><strong>任务 #{job.id}</strong><small>{admin ? `用户 #${job.user_id} · ` : ""}<time dateTime={job.created_at}>{new Date(job.created_at).toLocaleString("zh-CN", { hour12: false })}</time></small></span><span className="batch-job__counts">{job.success_count + job.failure_count} / {job.image_total}<small>已处理</small></span><span className="batch-job__expiry"><Clock3 aria-hidden="true" size={14} />{new Date(job.expires_at).toLocaleDateString("zh-CN")} 到期</span><StatusBadge tone={status.tone}>{status.label}</StatusBadge></Link>{terminal ? <button type="button" className="batch-job__delete" aria-label={`删除识别任务 #${job.id}`} onClick={() => onDelete(job)}>删除</button> : null}</li>;
 }
