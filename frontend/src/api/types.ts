@@ -120,7 +120,32 @@ export interface TrainingDataset {
   enabled: boolean;
   available: boolean;
   reason: string | null;
+  version: number;
+  status: "editing" | "published";
+  parent_id: number | null;
+  root_dataset_id: number | null;
+  revision: number;
+  published_at: string | null;
+  manifest_digest: string | null;
 }
+
+export interface TrainingDatasetImage {
+  id: number;
+  dataset_id: number;
+  split: "train" | "val" | "test";
+  image_key: string;
+  width: number;
+  height: number;
+  review_status: "pending_annotation" | "annotated" | "confirmed_empty";
+  validation_code: string | null;
+  revision: number;
+}
+
+export interface AnnotationBoxInput { class_id: number; x_center: number; y_center: number; width: number; height: number; }
+export interface TrainingDatasetImageDetail extends TrainingDatasetImage { boxes: AnnotationBoxInput[]; }
+export interface TrainingDatasetImagePage { items: TrainingDatasetImage[]; total: number; page: number; page_size: number; }
+export interface DatasetValidationIssue { code: string; severity: "error" | "warning"; split: string | null; image_id: number | null; message: string; }
+export interface DatasetValidationReport { errors: DatasetValidationIssue[]; warnings: DatasetValidationIssue[]; counts: Record<string, unknown>; digest: string | null; }
 
 export interface TrainingDatasetInput {
   name: string;
