@@ -10,6 +10,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-22-local-model-training-design.md` (section `Addendum: server dataset selection and actionable failures`)
 
+## Implementation Status (2026-08-22)
+
+Tasks 1–7 are implemented on `master`: authorized server roots, safe directory browsing, persisted dataset definitions, per-job dataset snapshots, local weight availability checks, safe Chinese diagnostics, dataset management/selection UI, and terminal recognition/training job deletion in both API and console. Focused backend regression is `90 passed, 1 platform skip`; focused frontend regression is `20 passed`; TypeScript typecheck, Python compileall, diff-check, and the production frontend build pass. Per project scope, real YOLO training, full-suite/browser E2E, live MySQL, and deployment acceptance remain deferred.
+
 ## Global Constraints
 
 - Only aliases and relative POSIX paths cross the API; never return or accept absolute server paths.
