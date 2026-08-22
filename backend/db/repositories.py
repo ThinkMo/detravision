@@ -72,6 +72,12 @@ def model_dict(row: ModelVersion) -> dict[str, Any]:
         "runtime": row.runtime,
         "classes": json.loads(row.classes),
         "map50": row.map50,
+        "training_job_id": row.training_job_id,
+        "source": row.source,
+        "base_model": row.base_model,
+        "imgsz": row.imgsz,
+        "metrics_json": row.metrics_json,
+        "deployment_runtime": row.deployment_runtime,
         "is_active": row.is_active,
         "created_at": utc_iso(row.created_at),
     }
@@ -287,6 +293,11 @@ class Repository:
             row = session.scalar(select(ModelVersion).where(ModelVersion.is_active.is_(True)).order_by(ModelVersion.id.desc()))
             return model_dict(row) if row else None
 
+    def get_model(self, model_id: int) -> dict[str, Any] | None:
+        with self.session_factory() as session:
+            row = session.get(ModelVersion, model_id)
+            return model_dict(row) if row is not None else None
+
     def create_model(self, data: dict[str, Any]) -> dict[str, Any]:
         return self._create(ModelVersion, self._json_fields(data, {"classes"}), model_dict)
 
@@ -321,16 +332,43 @@ class Repository:
             )
             return model_dict(row) if row is not None else None
 
-    def activate_model(self, model_id: int) -> dict[str, Any] | None:
+    def set_active_model(self, model_id: int) -> dict[str, Any] | None:
+        """Atomically activate one model and return the previously active row."""
         with self.session_factory.begin() as session:
-            row = session.get(ModelVersion, model_id)
+            rows = session.scalars(
+                select(ModelVersion).order_by(ModelVersion.id).with_for_update()
+            ).all()
+            row = next((item for item in rows if item.id == model_id), None)
             if row is None:
-                return None
+                raise LookupError("model not found")
+            previous = next((item for item in reversed(rows) if item.is_active), None)
+            previous_record = model_dict(previous) if previous is not None else None
             session.execute(update(ModelVersion).values(is_active=False))
             row.is_active = True
             session.flush()
-            session.refresh(row)
-            return model_dict(row)
+            return previous_record
+
+    def restore_active_model(self, model_id: int | None) -> None:
+        """Restore an activation snapshot after a failed runtime replacement."""
+        with self.session_factory.begin() as session:
+            rows = session.scalars(
+                select(ModelVersion).order_by(ModelVersion.id).with_for_update()
+            ).all()
+            target = next((item for item in rows if item.id == model_id), None)
+            if model_id is not None and target is None:
+                raise LookupError("model not found")
+            session.execute(update(ModelVersion).values(is_active=False))
+            if target is not None:
+                target.is_active = True
+            session.flush()
+
+    def activate_model(self, model_id: int) -> dict[str, Any] | None:
+        """Compatibility wrapper for callers that do not hot-swap inference."""
+        try:
+            self.set_active_model(model_id)
+        except LookupError:
+            return None
+        return self.get_model(model_id)
 
     def _create(self, model, data: dict[str, Any], convert: Callable[[Any], dict[str, Any]]) -> dict[str, Any]:
         with self.session_factory.begin() as session:

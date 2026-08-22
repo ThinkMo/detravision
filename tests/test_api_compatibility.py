@@ -32,6 +32,11 @@ def api_app(tmp_path):
     app = FastAPI()
     app.include_router(routes.router)
     app.state.repository = Repository(session_factory)
+    class CompatibilityActivationService:
+        def activate(self, model_id: int):
+            return app.state.repository.activate_model(model_id)
+
+    app.state.model_activation_service = CompatibilityActivationService()
     app.state.session_factory = session_factory
     app.dependency_overrides[current_user] = lambda: AuthenticatedUser(
         id=1,
@@ -186,7 +191,11 @@ def test_model_routes_preserve_response_statuses_and_keys(api_app):
     )
     assert created.status_code == 201
     model = created.json()
-    assert set(model) == {"id", "name", "runtime", "classes", "map50", "is_active", "created_at"}
+    assert set(model) == {
+        "id", "name", "runtime", "classes", "map50", "is_active", "created_at",
+        "training_job_id", "source", "base_model", "imgsz", "metrics_json",
+        "deployment_runtime",
+    }
 
     activated = request(api_app, "POST", f"/api/models/{model['id']}/activate")
     assert activated.status_code == 200

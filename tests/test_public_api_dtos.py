@@ -78,7 +78,9 @@ def test_business_dtos_never_expose_rtsp_model_or_snapshot_storage(app_factory, 
         model_activation = client.post(
             f"/api/models/{model_response.json()['id']}/activate"
         )
-        assert_no_storage_secrets(model_activation, model_secret)
+        assert model_activation.status_code == 503
+        assert model_activation.json() == {"detail": "model_load_failed"}
+        assert model_secret not in model_activation.text
 
         event = app.state.repository.create_event(
             {

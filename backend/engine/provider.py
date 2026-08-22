@@ -52,6 +52,11 @@ class DetectorProvider:
             self._model_version_id = model_version_id
             self._condition.notify_all()
 
+    def snapshot(self) -> tuple[Detector, int | None]:
+        """Return the installed detector/version pair for guarded rollback."""
+        with self._condition:
+            return self._detector, self._model_version_id
+
     def wait_until_available(
         self,
         stop_event: threading.Event,

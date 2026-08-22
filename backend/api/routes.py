@@ -13,6 +13,13 @@ from backend.auth import AuthenticatedUser
 from backend.auth.dependencies import current_user, require_same_origin
 from backend.core.public_records import public_camera, public_event, public_model
 from backend.db import MissingAlarmGroupMemberError, Repository
+from backend.model_activation import (
+    ModelActivationConflict,
+    ModelActivationService,
+    ModelLoadFailed,
+    ModelNotFound,
+    ModelWarmupFailed,
+)
 from backend.schemas import (
     AlarmGroupCreate,
     AlarmGroupUpdate,
@@ -32,6 +39,10 @@ protected_router = APIRouter(
 
 def repository(request: Request) -> Repository:
     return request.app.state.repository
+
+
+def model_activation_service(request: Request) -> ModelActivationService:
+    return request.app.state.model_activation_service
 
 
 def require(item: dict[str, Any] | None) -> dict[str, Any]:
@@ -338,11 +349,18 @@ def create_model(
 def activate_model(
     model_id: int,
     request: Request,
-    db: Repository = Depends(repository),
+    service: ModelActivationService = Depends(model_activation_service),
     user: AuthenticatedUser = Depends(audited_admin("activate", "model")),
 ) -> dict[str, Any]:
     with audit_rejections(request, user, "activate", "model", model_id):
-        model = require(db.activate_model(model_id))
+        try:
+            model = service.activate(model_id)
+        except ModelNotFound as exc:
+            raise HTTPException(status_code=404, detail=exc.code) from None
+        except (ModelLoadFailed, ModelWarmupFailed) as exc:
+            raise HTTPException(status_code=503, detail=exc.code) from None
+        except ModelActivationConflict as exc:
+            raise HTTPException(status_code=409, detail=exc.code) from None
     record_success(request, user, "activate", "model", model_id)
     return public_model(model)
 

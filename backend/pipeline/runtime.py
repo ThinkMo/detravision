@@ -130,6 +130,10 @@ class RuntimeManager:
         self.model_signature = signature
         logger.info("model_activation_succeeded model_id=%s", model["id"])
 
+    def set_model_signature(self, model: dict[str, Any]) -> None:
+        """Record an externally hot-swapped model for reconciliation."""
+        self.model_signature = (model["id"], model["file_path"])
+
     def _reconcile_model(self) -> None:
         """Compatibility shim for callers of the former private helper."""
         self.reconcile_once()

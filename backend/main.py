@@ -28,6 +28,7 @@ from backend.db import Repository
 from backend.db.migrate import run_migrations
 from backend.db.session import create_engine_from_url, create_session_factory
 from backend.engine import DetectorProvider, build_detector
+from backend.model_activation import ModelActivationService
 from backend.pipeline import RuntimeManager
 from backend.storage import LocalFileStorage
 from backend.web import mount_frontend
@@ -74,6 +75,11 @@ def application_lifespan(app_settings: Settings):
             detector_provider,
             hub,
         )
+        model_activation_service = ModelActivationService(
+            repository,
+            detector_provider,
+            runtime=runtime,
+        )
         app.state.settings = app_settings
         app.state.repository = repository
         app.state.session_factory = session_factory
@@ -88,6 +94,7 @@ def application_lifespan(app_settings: Settings):
         app.state.batch_worker = batch_worker
         app.state.retention_cleaner = retention_cleaner
         app.state.runtime = runtime
+        app.state.model_activation_service = model_activation_service
         runtime_started = False
         try:
             await runtime.start()
