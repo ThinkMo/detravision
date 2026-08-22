@@ -80,7 +80,7 @@ class ModelVersion(Base):
     classes: Mapped[str] = mapped_column(Text, nullable=False)
     map50: Mapped[float | None] = mapped_column(Float)
     training_job_id: Mapped[int | None] = mapped_column(
-        ForeignKey("training_job.id", ondelete="SET NULL")
+        ForeignKey("training_job.id", ondelete="SET NULL"), unique=True
     )
     source: Mapped[str | None] = mapped_column(String(20))
     base_model: Mapped[str | None] = mapped_column(String(30))
@@ -133,6 +133,7 @@ class TrainingJob(Base):
     executor: Mapped[str] = mapped_column(String(20), nullable=False)
     base_model: Mapped[str] = mapped_column(String(30), nullable=False)
     dataset_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    dataset_classes: Mapped[str | None] = mapped_column(Text)
     epochs: Mapped[int] = mapped_column(Integer, nullable=False)
     imgsz: Mapped[int] = mapped_column(Integer, nullable=False)
     batch: Mapped[str] = mapped_column(String(20), nullable=False)

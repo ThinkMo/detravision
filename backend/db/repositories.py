@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import case, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import AlarmGroup, Camera, DetectionEvent, ModelVersion, Person, alarm_group_member
@@ -288,6 +289,37 @@ class Repository:
 
     def create_model(self, data: dict[str, Any]) -> dict[str, Any]:
         return self._create(ModelVersion, self._json_fields(data, {"classes"}), model_dict)
+
+    def create_trained_model(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Create one candidate per training job, returning the winner of a race."""
+        training_job_id = data.get("training_job_id")
+        if type(training_job_id) is not int or training_job_id < 1:
+            raise ValueError("training_job_id must be a positive integer")
+        existing = self._trained_model(training_job_id)
+        if existing is not None:
+            return existing
+        values = self._json_fields(data, {"classes"})
+        try:
+            with self.session_factory.begin() as session:
+                row = ModelVersion(**values)
+                session.add(row)
+                session.flush()
+                session.refresh(row)
+                return model_dict(row)
+        except IntegrityError:
+            existing = self._trained_model(training_job_id)
+            if existing is None:
+                raise
+            return existing
+
+    def _trained_model(self, training_job_id: int) -> dict[str, Any] | None:
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(ModelVersion).where(
+                    ModelVersion.training_job_id == training_job_id
+                )
+            )
+            return model_dict(row) if row is not None else None
 
     def activate_model(self, model_id: int) -> dict[str, Any] | None:
         with self.session_factory.begin() as session:

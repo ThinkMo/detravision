@@ -176,6 +176,16 @@ def test_training_migration_adds_queue_indexes_and_model_provenance(tmp_path):
         "deployment_runtime",
     } <= model_columns.keys()
     assert model_columns["training_job_id"]["nullable"] is True
+    job_columns = {
+        column["name"]: column for column in inspector.get_columns("training_job")
+    }
+    assert "dataset_classes" in job_columns
+    assert isinstance(TrainingJob.__table__.c.dataset_classes.type, Text)
+    unique_training_models = {
+        tuple(item["column_names"])
+        for item in inspector.get_unique_constraints("model_version")
+    }
+    assert ("training_job_id",) in unique_training_models
     with create_engine(url).connect() as connection:
         assert connection.execute(text("select id from training_scheduler")).scalar_one() == 1
 
@@ -203,6 +213,49 @@ def test_mysql_training_migration_emits_portable_text_defaults():
     assert "INSERT INTO training_scheduler" in sql
     assert "status TEXT NOT NULL DEFAULT ('queued')" in sql
     assert "metrics_json TEXT" in sql
+
+
+def test_mysql_training_hardening_migration_is_offline_portable():
+    """Catches SQLite-only batch DDL or a missing MySQL uniqueness guarantee."""
+    output = StringIO()
+    config = alembic_config(
+        "mysql+pymysql://safety:safety@127.0.0.1/safety_test?charset=utf8mb4"
+    )
+    config.output_buffer = output
+
+    command.upgrade(config, "0006", sql=True)
+
+    sql = output.getvalue()
+    assert "dataset_classes TEXT" in sql
+    assert "UNIQUE (training_job_id)" in sql
+
+
+def test_training_hardening_migration_downgrades_and_reupgrades_sqlite(tmp_path):
+    """Catches a non-reversible SQLite batch migration for local development."""
+    url = "sqlite:///" + (tmp_path / "training-hardening-round-trip.db").as_posix()
+    config = alembic_config(url)
+    command.upgrade(config, "head")
+
+    command.downgrade(config, "0005")
+
+    downgraded = inspect(create_engine(url))
+    assert "dataset_classes" not in {
+        column["name"] for column in downgraded.get_columns("training_job")
+    }
+    assert ("training_job_id",) not in {
+        tuple(item["column_names"])
+        for item in downgraded.get_unique_constraints("model_version")
+    }
+
+    command.upgrade(config, "head")
+    upgraded = inspect(create_engine(url))
+    assert "dataset_classes" in {
+        column["name"] for column in upgraded.get_columns("training_job")
+    }
+    assert ("training_job_id",) in {
+        tuple(item["column_names"])
+        for item in upgraded.get_unique_constraints("model_version")
+    }
 
 
 def test_training_migration_can_downgrade_and_reupgrade_sqlite(tmp_path):
@@ -234,7 +287,7 @@ def test_legacy_sqlite_is_stamped_then_upgraded(legacy_database_url):
     run_migrations(legacy_database_url)
 
     with create_engine(legacy_database_url).connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0005"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0006"
         event_columns = {column["name"] for column in inspect(connection).get_columns("detection_event")}
     assert {"ack_by", "ack_user_id"} <= event_columns
 

@@ -59,7 +59,7 @@ class TrainingService:
     ) -> dict[str, Any]:
         normalized = self._request(request)
         key = self._idempotency_key(idempotency_key)
-        self._require_dataset()
+        dataset = self._require_dataset()
         run_key = self._storage.create_run()
         run_dir = self._storage.run_path(run_key)
         manifest = self._manifest(normalized, run_dir)
@@ -71,6 +71,7 @@ class TrainingService:
                     "executor": normalized.executor,
                     "base_model": normalized.base_model,
                     "dataset_key": "configured",
+                    "dataset_classes": dataset["classes"],
                     "epochs": normalized.epochs,
                     "imgsz": normalized.imgsz,
                     "batch": normalized.batch,
@@ -94,6 +95,7 @@ class TrainingService:
                 "executor": normalized.executor,
                 "base_model": normalized.base_model,
                 "dataset_key": "configured",
+                "dataset_classes": dataset["classes"],
                 "epochs": normalized.epochs,
                 "imgsz": normalized.imgsz,
                 "batch": normalized.batch,
@@ -146,6 +148,16 @@ class TrainingService:
                 "training_job_not_resumable",
                 "The training job cannot be resumed in its current state.",
             )
+        if (
+            source["status"] == "failed"
+            and source["error_code"] == "evaluation_failed"
+            and int(source["current_epoch"]) >= int(source["total_epochs"])
+        ):
+            raise TrainingServiceError(
+                409,
+                "evaluation_retry_required",
+                "Evaluation must be retried without resuming completed training.",
+            )
         if not source["has_last"]:
             raise self._resume_unavailable()
         try:
@@ -195,6 +207,27 @@ class TrainingService:
             ) from exc
         if resumed["run_key"] != run_key:
             self._remove_run(run_key)
+            expected = {
+                "created_by": source["created_by"],
+                "executor": source["executor"],
+                "base_model": source["base_model"],
+                "dataset_key": source["dataset_key"],
+                "dataset_classes": source["dataset_classes"],
+                "epochs": source["epochs"],
+                "imgsz": source["imgsz"],
+                "batch": source["batch"],
+                "device": source["device"],
+                "patience": source["patience"],
+                "resume_from_id": source["id"],
+            }
+            if any(
+                resumed.get(field) != value for field, value in expected.items()
+            ):
+                raise TrainingServiceError(
+                    409,
+                    "idempotency_conflict",
+                    "The idempotency key belongs to a different training request.",
+                )
         self._manager.wake()
         return resumed
 
@@ -233,7 +266,13 @@ class TrainingService:
                 422, "invalid_model_name", "The model name is invalid."
             )
         metrics = job["metrics"] or {}
-        classes = self._require_dataset()["classes"]
+        classes = job.get("dataset_classes")
+        if not isinstance(classes, list) or not classes:
+            raise TrainingServiceError(
+                409,
+                "training_model_unavailable",
+                "The training dataset class snapshot is unavailable.",
+            )
         provenance = {
             "training_job_id": job_id,
             "source": "training",
@@ -248,7 +287,7 @@ class TrainingService:
             "deployment_runtime": None,
         }
         try:
-            created = self._model_repository.create_model(
+            created = self._model_repository.create_trained_model(
                 {
                     "name": model_name,
                     "file_path": str(best.resolve()),

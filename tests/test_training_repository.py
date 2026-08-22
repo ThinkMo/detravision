@@ -6,13 +6,14 @@ from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import event, text
+from sqlalchemy import event, select, text
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Session
 
 from backend.db.migrate import run_migrations
-from backend.db.models import TrainingJob, User
+from backend.db.models import ModelVersion, TrainingJob, User
+from backend.db.repositories import Repository
 from backend.db.session import create_engine_from_url, create_session_factory
 from backend.training.repository import TrainingRepository
 
@@ -50,6 +51,7 @@ def valid_job(*, created_by: int, suffix: str = "1") -> dict[str, object]:
         "executor": "local",
         "base_model": "yolo11n.pt",
         "dataset_key": "safety",
+        "dataset_classes": ["person", "helmet", "no_helmet"],
         "epochs": 3,
         "imgsz": 640,
         "batch": "4",
@@ -77,6 +79,23 @@ def concurrently_flush_training_jobs(*calls):
         event.remove(Session, "before_flush", pause_before_flush)
 
 
+def concurrently_flush_trained_models(*calls):
+    """Force candidate inserts to race at the database uniqueness boundary."""
+    barrier = Barrier(len(calls))
+
+    def pause_before_flush(session, _flush_context, _instances):
+        if any(isinstance(row, ModelVersion) for row in session.new):
+            barrier.wait(timeout=5)
+
+    event.listen(Session, "before_flush", pause_before_flush)
+    try:
+        with ThreadPoolExecutor(max_workers=len(calls)) as executor:
+            futures = [executor.submit(call) for call in calls]
+            return [future.result(timeout=10) for future in futures]
+    finally:
+        event.remove(Session, "before_flush", pause_before_flush)
+
+
 def test_create_job_persists_safe_json_ready_record(training_context):
     """Catches losing configuration or leaking an internal filesystem path."""
     repository, _factory, admin_id = training_context
@@ -93,6 +112,7 @@ def test_create_job_persists_safe_json_ready_record(training_context):
     assert job["metrics"] is None
     assert "path" not in " ".join(job.keys())
     assert repository.get_job(job["id"]) == job
+    assert job["dataset_classes"] == ["person", "helmet", "no_helmet"]
 
 
 def test_create_job_reuses_an_idempotency_key(training_context):
@@ -430,3 +450,65 @@ def test_queued_job_cannot_jump_directly_to_completed(training_context):
     result = repository.mark_terminal(queued["id"], status="completed")
 
     assert result == queued
+
+
+def test_trained_model_registration_is_atomic_and_idempotent(training_context):
+    """Catches repeated registration creating more than one candidate per job."""
+    training_repository, factory, admin_id = training_context
+    queued = training_repository.create_job(valid_job(created_by=admin_id))
+    repository = Repository(factory)
+    values = {
+        "name": "candidate",
+        "file_path": "contained-best.pt",
+        "runtime": "pt",
+        "classes": ["person", "helmet", "no_helmet"],
+        "map50": 0.9,
+        "is_active": False,
+        "training_job_id": queued["id"],
+        "source": "training",
+        "base_model": "yolo11n.pt",
+        "imgsz": 640,
+        "metrics_json": "{}",
+        "deployment_runtime": None,
+    }
+
+    first = repository.create_trained_model(values)
+    second = repository.create_trained_model({**values, "name": "retry-name"})
+
+    assert second["id"] == first["id"]
+    with factory() as session:
+        assert len(
+            session.scalars(
+                select(ModelVersion).where(
+                    ModelVersion.training_job_id == queued["id"]
+                )
+            ).all()
+        ) == 1
+
+
+def test_concurrent_trained_model_registration_returns_one_candidate(training_context):
+    """Catches a registration race escaping the nullable unique constraint."""
+    training_repository, factory, admin_id = training_context
+    queued = training_repository.create_job(valid_job(created_by=admin_id))
+    repository = Repository(factory)
+    values = {
+        "name": "candidate",
+        "file_path": "contained-best.pt",
+        "runtime": "pt",
+        "classes": ["person", "helmet", "no_helmet"],
+        "map50": 0.9,
+        "is_active": False,
+        "training_job_id": queued["id"],
+        "source": "training",
+        "base_model": "yolo11n.pt",
+        "imgsz": 640,
+        "metrics_json": "{}",
+        "deployment_runtime": None,
+    }
+
+    results = concurrently_flush_trained_models(
+        lambda: repository.create_trained_model(values),
+        lambda: repository.create_trained_model({**values, "name": "racing retry"}),
+    )
+
+    assert results[0]["id"] == results[1]["id"]

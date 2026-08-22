@@ -32,6 +32,17 @@ def _decode_metrics(value: str | None) -> dict[str, Any] | None:
     return decoded if isinstance(decoded, dict) else None
 
 
+def _decode_classes(value: str | None) -> list[str]:
+    if value is None:
+        return []
+    decoded = json.loads(value)
+    if not isinstance(decoded, list) or not all(
+        isinstance(item, str) for item in decoded
+    ):
+        return []
+    return decoded
+
+
 def training_job_dict(row: TrainingJob) -> dict[str, Any]:
     """Return a JSON-ready training record without server-local paths."""
     return {
@@ -40,6 +51,7 @@ def training_job_dict(row: TrainingJob) -> dict[str, Any]:
         "executor": row.executor,
         "base_model": row.base_model,
         "dataset_key": row.dataset_key,
+        "dataset_classes": _decode_classes(row.dataset_classes),
         "epochs": row.epochs,
         "imgsz": row.imgsz,
         "batch": row.batch,
@@ -94,6 +106,11 @@ class TrainingRepository:
             executor=str(values["executor"]),
             base_model=str(values["base_model"]),
             dataset_key=str(values["dataset_key"]),
+            dataset_classes=json.dumps(
+                list(values.get("dataset_classes", [])),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
             epochs=int(values["epochs"]),
             imgsz=int(values["imgsz"]),
             batch=str(values["batch"]),
@@ -339,6 +356,7 @@ class TrainingRepository:
                 "executor": source.executor,
                 "base_model": source.base_model,
                 "dataset_key": source.dataset_key,
+                "dataset_classes": source.dataset_classes,
                 "epochs": source.epochs,
                 "imgsz": source.imgsz,
                 "batch": source.batch,

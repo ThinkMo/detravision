@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from backend.core.config import Settings
 from backend.db.migrate import run_migrations
-from backend.db.models import ModelVersion, User
+from backend.db.models import ModelVersion, TrainingJob, User
 from backend.db.repositories import Repository
 from backend.db.session import create_engine_from_url, create_session_factory
 from backend.training.catalog import TrainingRequest
@@ -121,6 +121,7 @@ def test_create_writes_complete_manifest_before_queue_commit_and_is_idempotent(
     assert observed_manifest["dataset_yaml"] == str(storage.dataset_yaml)
     assert Path(str(observed_manifest["run_dir"])).is_relative_to(storage.root)
     assert observed_manifest.get("resume_checkpoint") is None
+    assert first["dataset_classes"] == ["person", "helmet", "no_helmet"]
     assert repository.list_jobs()["total"] == 1
     assert len(list(storage.root.iterdir())) == 1
     assert manager.wakes == 2
@@ -221,7 +222,7 @@ def test_missing_job_operations_return_one_stable_error(service_context):
         assert captured.value.code == "training_job_not_found"
 
 
-def make_resumable(repository, storage, admin_id: int):
+def make_resumable(repository, storage, admin_id: int, suffix: str = "1"):
     created = repository.create_job(
         {
             "created_by": admin_id,
@@ -234,7 +235,8 @@ def make_resumable(repository, storage, admin_id: int):
             "device": "0",
             "patience": 5,
             "run_key": storage.create_run(),
-            "idempotency_key": "resume-source-1",
+            "dataset_classes": ["person", "helmet", "no_helmet"],
+            "idempotency_key": f"resume-source-{suffix}",
         }
     )
     running = repository.claim_next()
@@ -281,6 +283,50 @@ def test_resume_rejects_last_checkpoint_symlink_that_escapes_storage(service_con
     assert captured.value.code == "resume_checkpoint_unavailable"
 
 
+def test_resume_idempotency_rejects_other_source_and_create_key_collisions(
+    service_context,
+):
+    """Catches one idempotency key returning an unrelated create/resume attempt."""
+    service, repository, storage, _manager, _factory, admin_id, _settings = service_context
+    first, _ = make_resumable(repository, storage, admin_id, "collision-a")
+    resumed = service.resume(first["id"], idempotency_key="shared-resume-key")
+    repository.request_stop(resumed["id"])
+    second, _ = make_resumable(repository, storage, admin_id, "collision-b")
+
+    with pytest.raises(TrainingServiceError) as other_source:
+        service.resume(second["id"], idempotency_key="shared-resume-key")
+    assert other_source.value.code == "idempotency_conflict"
+    assert repository.get_job(resumed["id"])["resume_from_id"] == first["id"]
+
+    created = service.create(
+        created_by=admin_id,
+        request=request(),
+        idempotency_key="ordinary-create-key",
+    )
+    with pytest.raises(TrainingServiceError) as create_collision:
+        service.resume(second["id"], idempotency_key="ordinary-create-key")
+    assert create_collision.value.code == "idempotency_conflict"
+    assert repository.get_job(created["id"])["resume_from_id"] is None
+
+
+def test_failed_evaluation_at_total_epochs_is_not_offered_as_resumable(
+    service_context,
+):
+    """Catches a guaranteed-failing resume button for a fully trained checkpoint."""
+    service, repository, storage, _manager, _factory, admin_id, _settings = service_context
+    source, _last = make_resumable(repository, storage, admin_id, "evaluation")
+    with repository._session_factory.begin() as session:
+        row = session.get(TrainingJob, source["id"])
+        row.current_epoch = row.total_epochs
+        row.status = "failed"
+        row.error_code = "evaluation_failed"
+
+    with pytest.raises(TrainingServiceError) as captured:
+        service.resume(source["id"], idempotency_key="evaluation-resume")
+
+    assert captured.value.code == "evaluation_retry_required"
+
+
 def completed_job(repository, storage, admin_id: int):
     created = repository.create_job(
         {
@@ -288,6 +334,7 @@ def completed_job(repository, storage, admin_id: int):
             "executor": "local",
             "base_model": "yolo11l.pt",
             "dataset_key": "configured",
+            "dataset_classes": ["person", "helmet", "no_helmet"],
             "epochs": 10,
             "imgsz": 640,
             "batch": "4",
@@ -364,3 +411,26 @@ def test_register_model_rejects_best_changed_after_evaluation(service_context):
     assert captured.value.code == "model_artifact_changed"
     with factory() as session:
         assert session.scalar(select(ModelVersion.id)) is None
+
+
+def test_register_model_is_idempotent_and_uses_training_time_class_snapshot(
+    service_context,
+):
+    """Catches duplicate candidates or YAML edits changing trained model classes."""
+    service, repository, storage, _manager, factory, admin_id, settings = service_context
+    job, _best = completed_job(repository, storage, admin_id)
+    settings.training_dataset_yaml.write_text(
+        "train: changed\nval: changed\ntest: changed\nnames: [wrong]\n",
+        encoding="utf-8",
+    )
+
+    first = service.register_model(job["id"], name="original candidate")
+    second = service.register_model(job["id"], name="retry candidate")
+
+    assert second["id"] == first["id"]
+    with factory() as session:
+        rows = session.scalars(
+            select(ModelVersion).where(ModelVersion.training_job_id == job["id"])
+        ).all()
+        assert len(rows) == 1
+        assert json.loads(rows[0].classes) == ["person", "helmet", "no_helmet"]
