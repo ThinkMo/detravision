@@ -11,6 +11,13 @@ depends_on = None
 
 
 def upgrade() -> None:
+    scheduler_table = op.create_table(
+        "training_scheduler",
+        sa.Column("id", sa.Integer(), primary_key=True),
+        sa.CheckConstraint("id = 1", name="singleton"),
+    )
+    op.bulk_insert(scheduler_table, [{"id": 1}])
+
     op.create_table(
         "training_job",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
@@ -106,3 +113,4 @@ def downgrade() -> None:
     op.drop_index("ix_training_job_created_at", table_name="training_job")
     op.drop_index("ix_training_job_status", table_name="training_job")
     op.drop_table("training_job")
+    op.drop_table("training_scheduler")

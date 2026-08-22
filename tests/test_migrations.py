@@ -14,7 +14,15 @@ from sqlalchemy.engine import make_url
 
 from backend.db import migrate
 from backend.db.migrate import alembic_config, run_migrations
-from backend.db.models import BatchImage, Camera, DetectionEvent, ModelVersion, TrainingJob, UserSession
+from backend.db.models import (
+    BatchImage,
+    Camera,
+    DetectionEvent,
+    ModelVersion,
+    TrainingJob,
+    TrainingScheduler,
+    UserSession,
+)
 from backend.db.session import create_engine_from_url, create_session_factory
 
 
@@ -105,6 +113,8 @@ def test_fresh_sqlite_upgrade_creates_all_tables(tmp_path):
         "logo_cleanup_queue",
         "batch_job",
         "batch_image",
+        "training_job",
+        "training_scheduler",
     } <= names
 
 
@@ -143,6 +153,7 @@ def test_training_migration_adds_queue_indexes_and_model_provenance(tmp_path):
     inspector = inspect(create_engine(url))
 
     assert "training_job" in inspector.get_table_names()
+    assert "training_scheduler" in inspector.get_table_names()
     indexes = {
         tuple(index["column_names"])
         for index in inspector.get_indexes("training_job")
@@ -165,6 +176,8 @@ def test_training_migration_adds_queue_indexes_and_model_provenance(tmp_path):
         "deployment_runtime",
     } <= model_columns.keys()
     assert model_columns["training_job_id"]["nullable"] is True
+    with create_engine(url).connect() as connection:
+        assert connection.execute(text("select id from training_scheduler")).scalar_one() == 1
 
 
 def test_training_job_uses_portable_text_status_and_metrics():
@@ -173,6 +186,7 @@ def test_training_job_uses_portable_text_status_and_metrics():
     assert isinstance(TrainingJob.__table__.c.metrics_json.type, Text)
     assert isinstance(ModelVersion.__table__.c.metrics_json.type, Text)
     assert ModelVersion.__table__.c.training_job_id.nullable is True
+    assert TrainingScheduler.__table__.c.id.primary_key is True
 
 
 def test_mysql_training_migration_emits_portable_text_defaults():
@@ -185,8 +199,34 @@ def test_mysql_training_migration_emits_portable_text_defaults():
 
     sql = output.getvalue()
     assert "CREATE TABLE training_job" in sql
+    assert "CREATE TABLE training_scheduler" in sql
+    assert "INSERT INTO training_scheduler" in sql
     assert "status TEXT NOT NULL DEFAULT ('queued')" in sql
     assert "metrics_json TEXT" in sql
+
+
+def test_training_migration_can_downgrade_and_reupgrade_sqlite(tmp_path):
+    """Catches a one-way migration that cannot safely rebuild local development databases."""
+    url = "sqlite:///" + (tmp_path / "training-round-trip.db").as_posix()
+    config = alembic_config(url)
+    command.upgrade(config, "head")
+
+    command.downgrade(config, "0004")
+
+    downgraded = inspect(create_engine(url))
+    assert "training_job" not in downgraded.get_table_names()
+    assert "training_scheduler" not in downgraded.get_table_names()
+    assert "training_job_id" not in {
+        column["name"] for column in downgraded.get_columns("model_version")
+    }
+
+    command.upgrade(config, "head")
+
+    upgraded = inspect(create_engine(url))
+    assert {"training_job", "training_scheduler"} <= set(upgraded.get_table_names())
+    assert "training_job_id" in {
+        column["name"] for column in upgraded.get_columns("model_version")
+    }
 
 
 def test_legacy_sqlite_is_stamped_then_upgraded(legacy_database_url):

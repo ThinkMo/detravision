@@ -6,9 +6,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from backend.db.models import TrainingJob
+from backend.db.models import TrainingJob, TrainingScheduler
 
 
 ACTIVE_STATUSES = ("running", "evaluating", "stopping")
@@ -88,40 +89,30 @@ class TrainingRepository:
     def create_job(self, values: Mapping[str, Any]) -> dict[str, Any]:
         now = self._now()
         idempotency_key = str(values["idempotency_key"])
-        with self._session_factory.begin() as session:
-            existing = session.scalar(
-                select(TrainingJob).where(
-                    TrainingJob.idempotency_key == idempotency_key
-                )
-            )
-            if existing is not None:
-                return training_job_dict(existing)
-            job = TrainingJob(
-                created_by=int(values["created_by"]),
-                executor=str(values["executor"]),
-                base_model=str(values["base_model"]),
-                dataset_key=str(values["dataset_key"]),
-                epochs=int(values["epochs"]),
-                imgsz=int(values["imgsz"]),
-                batch=str(values["batch"]),
-                device=str(values["device"]),
-                patience=int(values["patience"]),
-                status="queued",
-                current_epoch=0,
-                total_epochs=int(values["epochs"]),
-                stop_requested=False,
-                run_key=str(values["run_key"]),
-                has_best=False,
-                has_last=False,
-                has_metrics=False,
-                idempotency_key=idempotency_key,
-                resume_from_id=values.get("resume_from_id"),
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(job)
-            session.flush()
-            return training_job_dict(job)
+        job = TrainingJob(
+            created_by=int(values["created_by"]),
+            executor=str(values["executor"]),
+            base_model=str(values["base_model"]),
+            dataset_key=str(values["dataset_key"]),
+            epochs=int(values["epochs"]),
+            imgsz=int(values["imgsz"]),
+            batch=str(values["batch"]),
+            device=str(values["device"]),
+            patience=int(values["patience"]),
+            status="queued",
+            current_epoch=0,
+            total_epochs=int(values["epochs"]),
+            stop_requested=False,
+            run_key=str(values["run_key"]),
+            has_best=False,
+            has_last=False,
+            has_metrics=False,
+            idempotency_key=idempotency_key,
+            resume_from_id=values.get("resume_from_id"),
+            created_at=now,
+            updated_at=now,
+        )
+        return self._insert_idempotent(job, idempotency_key)
 
     def get_job(self, job_id: int) -> dict[str, Any] | None:
         with self._session_factory() as session:
@@ -157,6 +148,14 @@ class TrainingRepository:
         now = self._now()
         with self._session_factory.begin() as session:
             self._lock_sqlite_writer(session)
+            if session.bind is not None and session.bind.dialect.name == "mysql":
+                scheduler_id = session.scalar(
+                    select(TrainingScheduler.id)
+                    .where(TrainingScheduler.id == 1)
+                    .with_for_update()
+                )
+                if scheduler_id is None:
+                    raise RuntimeError("training scheduler lock row is missing")
             active_statement = (
                 select(TrainingJob.id)
                 .where(TrainingJob.status.in_(ACTIVE_STATUSES))
@@ -213,16 +212,23 @@ class TrainingRepository:
         if pid is not None:
             values["pid"] = pid
         with self._session_factory.begin() as session:
+            allowed_statuses = ACTIVE_STATUSES
+            if status == "running":
+                allowed_statuses = ("running",)
+            elif status == "evaluating":
+                allowed_statuses = ("running", "evaluating")
             changed = session.execute(
                 update(TrainingJob)
                 .where(
                     TrainingJob.id == job_id,
-                    TrainingJob.status.in_(ACTIVE_STATUSES),
+                    TrainingJob.status.in_(allowed_statuses),
+                    TrainingJob.current_epoch <= current_epoch,
                 )
                 .values(**values)
             )
             if changed.rowcount != 1:
-                return None
+                existing = session.get(TrainingJob, job_id)
+                return training_job_dict(existing) if existing is not None else None
             row = session.get(TrainingJob, job_id)
             assert row is not None
             return training_job_dict(row)
@@ -277,12 +283,13 @@ class TrainingRepository:
         }
         if metrics_json is not None:
             values.update(self._metric_values(metrics, metrics_json))
+        allowed_statuses = ("queued",) if status == "cancelled" else ACTIVE_STATUSES
         with self._session_factory.begin() as session:
             changed = session.execute(
                 update(TrainingJob)
                 .where(
                     TrainingJob.id == job_id,
-                    TrainingJob.status.not_in(TERMINAL_STATUSES),
+                    TrainingJob.status.in_(allowed_statuses),
                 )
                 .values(**values)
             )
@@ -316,15 +323,10 @@ class TrainingRepository:
         idempotency_key: str,
     ) -> dict[str, Any]:
         now = self._now()
-        with self._session_factory.begin() as session:
-            self._lock_sqlite_writer(session)
-            duplicate = session.scalar(
-                select(TrainingJob).where(
-                    TrainingJob.idempotency_key == idempotency_key
-                )
-            )
-            if duplicate is not None:
-                return training_job_dict(duplicate)
+        duplicate = self._get_by_idempotency_key(idempotency_key)
+        if duplicate is not None:
+            return duplicate
+        with self._session_factory() as session:
             source = session.get(TrainingJob, job_id)
             if source is None:
                 raise ValueError("training job does not exist")
@@ -332,38 +334,64 @@ class TrainingRepository:
                 raise ValueError("last checkpoint is unavailable")
             if source.status not in ("stopped", "interrupted", "failed"):
                 raise ValueError("training job cannot be resumed")
-            resumed = TrainingJob(
-                created_by=source.created_by,
-                executor=source.executor,
-                base_model=source.base_model,
-                dataset_key=source.dataset_key,
-                epochs=source.epochs,
-                imgsz=source.imgsz,
-                batch=source.batch,
-                device=source.device,
-                patience=source.patience,
-                status="queued",
-                current_epoch=0,
-                total_epochs=source.total_epochs,
-                stop_requested=False,
-                run_key=run_key,
-                has_best=False,
-                has_last=False,
-                has_metrics=False,
-                idempotency_key=idempotency_key,
-                resume_from_id=source.id,
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(resumed)
-            session.flush()
-            return training_job_dict(resumed)
+            source_values = {
+                "created_by": source.created_by,
+                "executor": source.executor,
+                "base_model": source.base_model,
+                "dataset_key": source.dataset_key,
+                "epochs": source.epochs,
+                "imgsz": source.imgsz,
+                "batch": source.batch,
+                "device": source.device,
+                "patience": source.patience,
+                "total_epochs": source.total_epochs,
+                "resume_from_id": source.id,
+            }
+        resumed = TrainingJob(
+            **source_values,
+            status="queued",
+            current_epoch=0,
+            stop_requested=False,
+            run_key=run_key,
+            has_best=False,
+            has_last=False,
+            has_metrics=False,
+            idempotency_key=idempotency_key,
+            created_at=now,
+            updated_at=now,
+        )
+        return self._insert_idempotent(resumed, idempotency_key)
 
     def _now(self) -> datetime:
         value = self._clock()
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("clock must return a timezone-aware datetime")
         return value.astimezone(timezone.utc)
+
+    def _insert_idempotent(
+        self, job: TrainingJob, idempotency_key: str
+    ) -> dict[str, Any]:
+        try:
+            with self._session_factory.begin() as session:
+                session.add(job)
+                session.flush()
+                return training_job_dict(job)
+        except IntegrityError:
+            duplicate = self._get_by_idempotency_key(idempotency_key)
+            if duplicate is None:
+                raise
+            return duplicate
+
+    def _get_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        with self._session_factory() as session:
+            row = session.scalar(
+                select(TrainingJob).where(
+                    TrainingJob.idempotency_key == idempotency_key
+                )
+            )
+            return training_job_dict(row) if row is not None else None
 
     @staticmethod
     def _serialize_metrics(metrics: Mapping[str, Any] | None) -> str | None:

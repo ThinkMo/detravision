@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from threading import Barrier
+from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import event, text
+from sqlalchemy.exc import DatabaseError
+from sqlalchemy.dialects import mysql
+from sqlalchemy.orm import Session
 
 from backend.db.migrate import run_migrations
 from backend.db.models import TrainingJob, User
@@ -53,6 +60,23 @@ def valid_job(*, created_by: int, suffix: str = "1") -> dict[str, object]:
     }
 
 
+def concurrently_flush_training_jobs(*calls):
+    """Synchronize real ORM inserts so uniqueness races are deterministic."""
+    barrier = Barrier(len(calls))
+
+    def pause_before_flush(session, _flush_context, _instances):
+        if any(isinstance(row, TrainingJob) for row in session.new):
+            barrier.wait(timeout=5)
+
+    event.listen(Session, "before_flush", pause_before_flush)
+    try:
+        with ThreadPoolExecutor(max_workers=len(calls)) as executor:
+            futures = [executor.submit(call) for call in calls]
+            return [future.result(timeout=10) for future in futures]
+    finally:
+        event.remove(Session, "before_flush", pause_before_flush)
+
+
 def test_create_job_persists_safe_json_ready_record(training_context):
     """Catches losing configuration or leaking an internal filesystem path."""
     repository, _factory, admin_id = training_context
@@ -83,6 +107,23 @@ def test_create_job_reuses_an_idempotency_key(training_context):
     assert repository.list_jobs()["total"] == 1
 
 
+def test_concurrent_create_job_reuses_an_idempotency_key(training_context):
+    """Catches a uniqueness race leaking a database exception to duplicate callers."""
+    repository, _factory, admin_id = training_context
+    first_request = valid_job(created_by=admin_id, suffix="concurrent-a")
+    second_request = valid_job(created_by=admin_id, suffix="concurrent-b")
+    first_request["idempotency_key"] = "same-create-request"
+    second_request["idempotency_key"] = "same-create-request"
+
+    results = concurrently_flush_training_jobs(
+        lambda: repository.create_job(first_request),
+        lambda: repository.create_job(second_request),
+    )
+
+    assert results[0]["id"] == results[1]["id"]
+    assert repository.list_jobs()["total"] == 1
+
+
 def test_claim_next_serializes_jobs_in_creation_order(training_context):
     """Catches two local GPU jobs being claimed concurrently or out of order."""
     repository, _factory, admin_id = training_context
@@ -100,6 +141,45 @@ def test_claim_next_serializes_jobs_in_creation_order(training_context):
     assert repository.claim_next() is None
     repository.mark_terminal(first["id"], status="completed", metrics={"map50": 0.9})
     assert repository.claim_next()["id"] == second["id"]
+
+
+def test_mysql_claim_locks_the_single_scheduler_row_before_reading_jobs():
+    """Catches MySQL claims relying on an empty active-row gap for mutual exclusion."""
+
+    class RecordingSession:
+        bind = SimpleNamespace(dialect=SimpleNamespace(name="mysql"))
+
+        def __init__(self):
+            self.statements = []
+
+        def scalar(self, statement):
+            self.statements.append(statement)
+            return 1
+
+    class Transaction:
+        def __init__(self, session):
+            self.session = session
+
+        def __enter__(self):
+            return self.session
+
+        def __exit__(self, *_args):
+            return False
+
+    class Factory:
+        def __init__(self, session):
+            self.session = session
+
+        def begin(self):
+            return Transaction(self.session)
+
+    session = RecordingSession()
+    repository = TrainingRepository(Factory(session), clock=lambda: NOW)
+
+    assert repository.claim_next() is None
+    first_sql = str(session.statements[0].compile(dialect=mysql.dialect()))
+    assert "FROM training_scheduler" in first_sql
+    assert "FOR UPDATE" in first_sql
 
 
 def test_request_stop_cancels_queued_and_is_idempotent(training_context):
@@ -133,6 +213,38 @@ def test_request_stop_marks_a_running_job_as_stopping(training_context):
     assert stopping["finished_at"] is None
 
 
+def test_late_progress_cannot_move_stopping_job_back_to_running(training_context):
+    """Catches stale worker progress undoing an administrator stop request."""
+    repository, _factory, admin_id = training_context
+    repository.create_job(valid_job(created_by=admin_id))
+    running = repository.claim_next()
+    assert running is not None
+    stopping = repository.request_stop(running["id"])
+
+    late = repository.update_progress(
+        running["id"], current_epoch=2, status="running"
+    )
+
+    assert late == stopping
+
+
+def test_progress_cannot_move_evaluating_job_back_to_running(training_context):
+    """Catches late epoch progress regressing held-out evaluation state."""
+    repository, _factory, admin_id = training_context
+    repository.create_job(valid_job(created_by=admin_id))
+    running = repository.claim_next()
+    assert running is not None
+    evaluating = repository.update_progress(
+        running["id"], current_epoch=3, status="evaluating"
+    )
+
+    late = repository.update_progress(
+        running["id"], current_epoch=2, status="running"
+    )
+
+    assert late == evaluating
+
+
 def test_recover_interrupted_only_changes_active_jobs_once(training_context):
     """Catches restart recovery altering terminal jobs or repeatedly reporting rows."""
     repository, _factory, admin_id = training_context
@@ -163,6 +275,30 @@ def test_resume_copies_configuration_and_records_lineage(training_context):
     assert resumed["status"] == "queued"
     assert resumed["base_model"] == original["base_model"]
     assert repository.get_job(original["id"])["status"] == "stopped"
+
+
+def test_concurrent_resume_reuses_an_idempotency_key(training_context):
+    """Catches simultaneous resume requests creating two attempts or leaking IntegrityError."""
+    repository, _factory, admin_id = training_context
+    original = repository.create_job(valid_job(created_by=admin_id, suffix="original"))
+    repository.claim_next()
+    repository.mark_terminal(original["id"], status="stopped", has_last=True)
+
+    results = concurrently_flush_training_jobs(
+        lambda: repository.create_resume(
+            original["id"],
+            run_key="run-resume-a",
+            idempotency_key="same-resume-request",
+        ),
+        lambda: repository.create_resume(
+            original["id"],
+            run_key="run-resume-b",
+            idempotency_key="same-resume-request",
+        ),
+    )
+
+    assert results[0]["id"] == results[1]["id"]
+    assert repository.list_jobs()["total"] == 2
 
 
 def test_resume_rejects_a_job_without_last_checkpoint(training_context):
@@ -206,16 +342,23 @@ def test_list_jobs_is_newest_first_and_page_size_is_bounded(training_context):
         repository.list_jobs(page_size=101)
 
 
-def test_progress_serialization_failure_rolls_back_the_transition(training_context):
-    """Catches a partial progress write when metrics cannot be persisted as JSON."""
-    repository, _factory, admin_id = training_context
+def test_progress_database_failure_rolls_back_the_transition(training_context):
+    """Catches a database update failure partially persisting progress or metrics."""
+    repository, session_factory, admin_id = training_context
     repository.create_job(valid_job(created_by=admin_id))
     running = repository.claim_next()
     assert running is not None
+    with session_factory.begin() as session:
+        session.execute(
+            text(
+                "CREATE TRIGGER reject_epoch_two BEFORE UPDATE ON training_job "
+                "WHEN NEW.current_epoch = 2 BEGIN SELECT RAISE(ABORT, 'rejected'); END"
+            )
+        )
 
-    with pytest.raises(ValueError, match="JSON serializable"):
+    with pytest.raises(DatabaseError):
         repository.update_progress(
-            running["id"], current_epoch=2, metrics={"loss": float("nan")}
+            running["id"], current_epoch=2, metrics={"loss": 0.25}
         )
 
     stored = repository.get_job(running["id"])
@@ -277,3 +420,13 @@ def test_terminal_job_cannot_be_rewritten_by_a_late_worker_result(training_conte
     )
 
     assert late == completed
+
+
+def test_queued_job_cannot_jump_directly_to_completed(training_context):
+    """Catches a worker result completing a job that was never claimed."""
+    repository, _factory, admin_id = training_context
+    queued = repository.create_job(valid_job(created_by=admin_id))
+
+    result = repository.mark_terminal(queued["id"], status="completed")
+
+    assert result == queued

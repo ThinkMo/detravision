@@ -178,6 +178,15 @@ class TrainingJob(Base):
     )
 
 
+class TrainingScheduler(Base):
+    """Singleton row used to serialize MySQL training-job claims."""
+
+    __tablename__ = "training_scheduler"
+    __table_args__ = (CheckConstraint("id = 1", name="singleton"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+
 class SiteSettings(Base):
     __tablename__ = "site_settings"
 
