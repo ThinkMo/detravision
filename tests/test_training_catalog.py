@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from backend.core.config import Settings
-from backend.training.catalog import MODEL_IDS, TrainingRequest, training_catalog
+from backend.training.catalog import (
+    MAX_DATASET_YAML_BYTES,
+    MODEL_IDS,
+    TrainingRequest,
+    training_catalog,
+)
 
 
 EXPECTED_MODEL_IDS = (
@@ -66,6 +71,57 @@ def test_catalog_summarizes_dataset_without_exposing_server_path(tmp_path: Path)
     serialized = repr(catalog)
     assert str(settings.training_dataset_yaml) not in serialized
     assert str(tmp_path) not in serialized
+
+
+@pytest.mark.parametrize(
+    "yaml_text",
+    [
+        "train: images/train\nval: images/val\nnames: [person]\n",
+        "train: ''\nval: images/val\ntest: images/test\nnames: [person]\n",
+        "train: images/train\nval: []\ntest: images/test\nnames: [person]\n",
+        "train: images/train\nval: images/val\ntest: images/test\nnames: []\n",
+        "train: images/train\nval: images/val\ntest: images/test\nnames: wrong\n",
+        "- train\n- val\n- test\n",
+    ],
+)
+def test_catalog_marks_incomplete_or_wrongly_typed_dataset_unavailable(
+    tmp_path: Path,
+    yaml_text: str,
+):
+    """Catches malformed dataset summaries being advertised as trainable."""
+    settings = make_settings(tmp_path)
+    settings.training_dataset_yaml.write_text(yaml_text, encoding="utf-8")
+
+    assert training_catalog(settings)["dataset"] == {
+        "id": "configured",
+        "available": False,
+        "has_test_split": False,
+        "classes": [],
+    }
+
+
+def test_catalog_rejects_dataset_yaml_larger_than_fixed_budget(tmp_path: Path):
+    """Catches an oversized configured YAML consuming unbounded parser resources."""
+    settings = make_settings(tmp_path)
+    valid_prefix = (
+        b"train: images/train\nval: images/val\ntest: images/test\nnames: [person]\n"
+    )
+    padding = b"#" * (MAX_DATASET_YAML_BYTES + 1 - len(valid_prefix))
+    settings.training_dataset_yaml.write_bytes(valid_prefix + padding)
+
+    assert training_catalog(settings)["dataset"]["available"] is False
+
+
+def test_catalog_fails_closed_for_deeply_nested_yaml(tmp_path: Path):
+    """Catches parser recursion/resource failures escaping the catalog boundary."""
+    settings = make_settings(tmp_path)
+    deeply_nested = "root:\n" + "".join(
+        f"{'  ' * depth}level{depth}:\n" for depth in range(1, 600)
+    )
+    assert len(deeply_nested.encode("utf-8")) < MAX_DATASET_YAML_BYTES
+    settings.training_dataset_yaml.write_text(deeply_nested, encoding="utf-8")
+
+    assert training_catalog(settings)["dataset"]["available"] is False
 
 
 @pytest.mark.parametrize(
@@ -169,7 +225,12 @@ def test_training_request_accepts_documented_boundary_values(
     ("field", "value"),
     [
         ("training_log_tail_bytes", 0),
+        ("training_log_tail_bytes", True),
+        ("training_log_tail_bytes", 10.0),
         ("training_stop_timeout_seconds", 0),
+        ("training_stop_timeout_seconds", True),
+        ("training_stop_timeout_seconds", float("nan")),
+        ("training_stop_timeout_seconds", float("inf")),
     ],
 )
 def test_training_settings_require_positive_operational_limits(

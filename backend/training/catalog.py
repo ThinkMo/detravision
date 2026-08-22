@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -7,6 +8,8 @@ import yaml
 
 from backend.core.config import Settings
 
+
+MAX_DATASET_YAML_BYTES = 1024 * 1024
 
 MODEL_IDS = tuple(
     f"yolo{series}{size}.pt"
@@ -54,14 +57,23 @@ def _dataset_summary(settings: Settings) -> dict[str, Any]:
         "classes": [],
     }
     try:
-        payload = yaml.safe_load(settings.training_dataset_yaml.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, yaml.YAMLError):
+        with settings.training_dataset_yaml.open("rb") as stream:
+            raw_yaml = stream.read(MAX_DATASET_YAML_BYTES + 1)
+        if len(raw_yaml) > MAX_DATASET_YAML_BYTES:
+            return summary
+        payload = yaml.safe_load(raw_yaml.decode("utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError, RecursionError, MemoryError):
         return summary
-    if not isinstance(payload, dict):
+    if not isinstance(payload, Mapping):
         return summary
 
+    splits_are_valid = all(
+        isinstance(payload.get(split), str) and bool(payload[split].strip())
+        for split in ("train", "val", "test")
+    )
+
     names = payload.get("names")
-    if isinstance(names, dict):
+    if isinstance(names, Mapping) and names:
         try:
             classes = [
                 str(name)
@@ -69,14 +81,16 @@ def _dataset_summary(settings: Settings) -> dict[str, Any]:
             ]
         except (TypeError, ValueError):
             classes = []
-    elif isinstance(names, list):
+    elif isinstance(names, list) and names:
         classes = [str(name) for name in names]
     else:
         classes = []
+    if not splits_are_valid or not classes:
+        return summary
     return {
         "id": "configured",
         "available": True,
-        "has_test_split": bool(payload.get("test")),
+        "has_test_split": True,
         "classes": classes,
     }
 

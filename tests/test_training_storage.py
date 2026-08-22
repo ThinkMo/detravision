@@ -116,6 +116,81 @@ def test_tail_log_respects_a_smaller_caller_limit(tmp_path: Path):
         storage.tail_log(run_key, limit=0)
 
 
+@pytest.mark.parametrize("limit", [True, 4.0, float("nan"), float("inf")])
+def test_tail_log_rejects_non_integer_limits(tmp_path: Path, limit: object):
+    """Catches ambiguous or non-finite limits bypassing the byte bound."""
+    storage = make_storage(tmp_path)
+    run_key = storage.create_run()
+
+    with pytest.raises(ValueError):
+        storage.tail_log(run_key, limit=limit)
+
+
+def test_tail_log_scrubs_arbitrary_absolute_paths_and_traceback_source(tmp_path: Path):
+    """Catches non-configured server paths and source lines leaking through logs."""
+    storage = make_storage(tmp_path, tail_bytes=4096)
+    run_key = storage.create_run()
+    log = storage.resolve_artifact(run_key, "log")
+    log.write_text(
+        "weights=D:\\private\\customer\\best.pt\n"
+        "spaced=D:\\Private Data\\customer model\\best.pt\n"
+        "share=\\\\server\\secret\\dataset\\images\n"
+        "config=/srv/safety/private/config.yaml\n"
+        "Traceback (most recent call last):\n"
+        '  File "C:\\Python312\\Lib\\worker.py", line 9, in run\n'
+        "    secret = open('/srv/credentials/token')\n"
+        "RuntimeError: training failed\n",
+        encoding="utf-8",
+    )
+
+    result = storage.tail_log(run_key, limit=4096)
+
+    for secret in (
+        "D:\\private",
+        "Private Data",
+        "customer model",
+        "\\\\server\\secret",
+        "/srv/safety",
+        "C:\\Python312",
+        "worker.py",
+        "secret = open",
+        "/srv/credentials",
+    ):
+        assert secret not in result
+    assert "RuntimeError: training failed" in result
+
+
+def test_tail_log_does_not_leak_a_path_when_read_starts_in_its_middle(tmp_path: Path):
+    """Catches byte-tail seeking exposing a suffix of an absolute private path."""
+    storage = make_storage(tmp_path, tail_bytes=128)
+    run_key = storage.create_run()
+    storage.resolve_artifact(run_key, "log").write_text(
+        "old line\n"
+        + "D:\\private\\customer\\"
+        + ("nested\\" * 40)
+        + "secret.pt\nSAFE-END",
+        encoding="utf-8",
+    )
+
+    result = storage.tail_log(run_key, limit=32)
+
+    assert "private" not in result.casefold()
+    assert "nested" not in result.casefold()
+    assert "secret.pt" not in result.casefold()
+    assert result.endswith("SAFE-END")
+
+
+def test_tail_log_return_is_strictly_bounded_after_utf8_replacement(tmp_path: Path):
+    """Catches UTF-8 replacement characters expanding the returned byte length."""
+    storage = make_storage(tmp_path, tail_bytes=64)
+    run_key = storage.create_run()
+    storage.resolve_artifact(run_key, "log").write_bytes("前缀安全帽".encode("utf-8"))
+
+    result = storage.tail_log(run_key, limit=5)
+
+    assert len(result.encode("utf-8")) <= 5
+
+
 def test_scrub_log_removes_configured_windows_and_posix_root_spellings(tmp_path: Path):
     """Catches server-local configured roots leaking in returned logs."""
     storage = make_storage(tmp_path)

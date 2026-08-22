@@ -17,6 +17,15 @@ ARTIFACTS = {
 }
 
 _RUN_KEY = re.compile(r"run-[0-9a-f]{32}\Z")
+_TAIL_OVERLAP_BYTES = 8192
+_TRACEBACK_FILE_LINE = re.compile(r"^\s*File\s+['\"]")
+_WINDOWS_DRIVE_PATH = re.compile(
+    r"(?i)(?<![a-z0-9_])[a-z]:[\\/][^\r\n\t\s'\"<>|]*"
+)
+_UNC_PATH = re.compile(r"\\\\[^\r\n\t\s\\/'\"<>|]+\\[^\r\n\t\s'\"<>|]+")
+_POSIX_PATH = re.compile(
+    r"(?<![a-zA-Z0-9_:/.])/(?:[^\r\n\t\s/'\"<>|]+/)*[^\r\n\t\s/'\"<>|]+"
+)
 
 
 class TrainingStorage:
@@ -72,7 +81,7 @@ class TrainingStorage:
         return self._contained(self.run_path(run_key) / relative_name)
 
     def tail_log(self, run_key: str, limit: int) -> str:
-        if isinstance(limit, bool) or limit < 1:
+        if type(limit) is not int or limit < 1:
             raise ValueError("log tail limit must be positive")
         byte_limit = min(limit, self.log_tail_bytes)
         path = self.resolve_artifact(run_key, "log")
@@ -80,11 +89,18 @@ class TrainingStorage:
             with path.open("rb") as stream:
                 stream.seek(0, 2)
                 size = stream.tell()
-                stream.seek(max(0, size - byte_limit))
-                payload = stream.read(byte_limit)
+                start = max(0, size - byte_limit - _TAIL_OVERLAP_BYTES)
+                stream.seek(start)
+                payload = stream.read(byte_limit + _TAIL_OVERLAP_BYTES)
         except FileNotFoundError:
             return ""
-        return self.scrub_log(payload.decode("utf-8", errors="replace"))
+        if start:
+            _, separator, payload = payload.partition(b"\n")
+            if not separator:
+                return ""
+        scrubbed = self.scrub_log(payload.decode("utf-8", errors="replace"))
+        encoded = scrubbed.encode("utf-8")[-byte_limit:]
+        return encoded.decode("utf-8", errors="ignore")
 
     def scrub_log(self, text: str) -> str:
         configured_paths = {
@@ -106,4 +122,29 @@ class TrainingStorage:
                     scrubbed,
                     flags=re.IGNORECASE,
                 )
-        return scrubbed
+        safe_lines: list[str] = []
+        redact_source_line = False
+        for line in scrubbed.splitlines(keepends=True):
+            if _TRACEBACK_FILE_LINE.match(line):
+                ending = "\n" if line.endswith(("\n", "\r")) else ""
+                safe_lines.append(f"[traceback location redacted]{ending}")
+                redact_source_line = True
+                continue
+            if redact_source_line and line[:1].isspace():
+                ending = "\n" if line.endswith(("\n", "\r")) else ""
+                safe_lines.append(f"[traceback source redacted]{ending}")
+                continue
+            redact_source_line = False
+            if (
+                _WINDOWS_DRIVE_PATH.search(line)
+                or _UNC_PATH.search(line)
+                or _POSIX_PATH.search(line)
+            ):
+                ending = "\n" if line.endswith(("\n", "\r")) else ""
+                safe_lines.append(f"[path redacted]{ending}")
+                continue
+            line = _UNC_PATH.sub("[redacted]", line)
+            line = _WINDOWS_DRIVE_PATH.sub("[redacted]", line)
+            line = _POSIX_PATH.sub("[redacted]", line)
+            safe_lines.append(line)
+        return "".join(safe_lines)

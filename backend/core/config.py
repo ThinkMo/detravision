@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
+from numbers import Real
 from pathlib import Path
 
 
@@ -56,9 +58,17 @@ class Settings:
             raise ValueError("BATCH_RETENTION_DAYS must be positive")
         if self.batch_worker_count != 1:
             raise ValueError("BATCH_WORKER_COUNT must be 1 for this release")
-        if self.training_log_tail_bytes < 1:
+        if (
+            type(self.training_log_tail_bytes) is not int
+            or self.training_log_tail_bytes < 1
+        ):
             raise ValueError("TRAINING_LOG_TAIL_BYTES must be positive")
-        if self.training_stop_timeout_seconds <= 0:
+        if (
+            isinstance(self.training_stop_timeout_seconds, bool)
+            or not isinstance(self.training_stop_timeout_seconds, Real)
+            or not math.isfinite(self.training_stop_timeout_seconds)
+            or self.training_stop_timeout_seconds <= 0
+        ):
             raise ValueError("TRAINING_STOP_TIMEOUT_SECONDS must be positive")
 
     @property
