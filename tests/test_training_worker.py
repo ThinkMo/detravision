@@ -94,6 +94,38 @@ def test_contracts_validate_json_types_and_round_trip(tmp_path: Path):
     assert result.status == "completed"
 
 
+@pytest.mark.parametrize("resume_value", ["relative/last.pt", "outside"])
+def test_manifest_requires_resume_checkpoint_to_be_absolute_and_inside_run(
+    tmp_path: Path, resume_value: str
+):
+    """Catches a resume attempt loading an arbitrary checkpoint outside its run."""
+    payload = manifest_payload(tmp_path)
+    if resume_value == "outside":
+        checkpoint = tmp_path / "outside" / "last.pt"
+        checkpoint.parent.mkdir()
+        checkpoint.write_bytes(b"outside")
+        payload["resume_checkpoint"] = str(checkpoint.resolve())
+    else:
+        payload["resume_checkpoint"] = resume_value
+
+    with pytest.raises(ValueError):
+        TrainingManifest.from_json(payload)
+
+
+def test_manifest_accepts_only_a_contained_resume_checkpoint(tmp_path: Path):
+    """Catches the trusted resume checkpoint being omitted from the worker contract."""
+    payload = manifest_payload(tmp_path)
+    checkpoint = Path(str(payload["run_dir"])) / "resume" / "last.pt"
+    checkpoint.parent.mkdir()
+    checkpoint.write_bytes(b"resume")
+    payload["resume_checkpoint"] = str(checkpoint.resolve())
+
+    manifest = TrainingManifest.from_json(payload)
+
+    assert manifest.resume_checkpoint == str(checkpoint.resolve())
+    assert manifest.to_json() == payload
+
+
 @pytest.mark.parametrize("contract", ["manifest", "progress", "result"])
 def test_contracts_reject_extra_fields(tmp_path: Path, contract: str):
     """Catches injected commands or unversioned fields crossing JSON boundaries."""
@@ -517,6 +549,31 @@ def test_worker_resolves_auto_device_to_cpu_and_numeric_batch(tmp_path: Path):
     call = FakeYOLO.instances[0].train_calls[0]
     assert call["device"] == "cpu"
     assert call["batch"] == 4
+
+
+def test_worker_resumes_from_contained_checkpoint_instead_of_base_model(tmp_path: Path):
+    """Catches a resume request silently starting a fresh base-model training run."""
+    payload = manifest_payload(tmp_path)
+    checkpoint = Path(str(payload["run_dir"])) / "resume" / "last.pt"
+    checkpoint.parent.mkdir()
+    checkpoint.write_bytes(b"resume checkpoint")
+    manifest_path, _ = write_manifest(
+        tmp_path, resume_checkpoint=str(checkpoint.resolve())
+    )
+
+    assert main(
+        ["--manifest", str(manifest_path)],
+        yolo_cls=FakeYOLO,
+        cuda_available=lambda: False,
+        project_root=tmp_path,
+    ) == 0
+
+    training_model = FakeYOLO.instances[0]
+    assert Path(training_model.model) == checkpoint.resolve()
+    assert training_model.train_calls[0]["resume"] is True
+    assert Path(str(training_model.train_calls[0]["save_dir"])) == (
+        Path(str(payload["run_dir"])) / "train"
+    ).resolve()
 
 
 def test_worker_uses_fit_epoch_callback_for_current_validation_metrics(tmp_path: Path):

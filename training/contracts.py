@@ -26,6 +26,7 @@ _MANIFEST_KEYS = frozenset(
         "patience",
     }
 )
+_MANIFEST_OPTIONAL_KEYS = frozenset({"resume_checkpoint"})
 _PROGRESS_KEYS = frozenset({"current_epoch", "total_epochs", "metrics"})
 _RESULT_KEYS = frozenset(
     {
@@ -117,11 +118,16 @@ class TrainingManifest:
     batch: str
     device: str
     patience: int
+    resume_checkpoint: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> "TrainingManifest":
         values = _mapping(payload, "training manifest")
-        _exact_keys(values, _MANIFEST_KEYS, "training manifest")
+        if set(values) not in (
+            _MANIFEST_KEYS,
+            _MANIFEST_KEYS | _MANIFEST_OPTIONAL_KEYS,
+        ):
+            raise ValueError("training manifest has unsupported or missing fields")
         base_model = _string(values, "base_model")
         if _MODEL_ID.fullmatch(base_model) is None:
             raise ValueError("unsupported base model")
@@ -140,20 +146,40 @@ class TrainingManifest:
             raise ValueError("unsupported device")
         if not 0 <= patience <= 500:
             raise ValueError("patience out of range")
+        run_dir = _absolute_path(values, "run_dir")
+        resume_checkpoint = values.get("resume_checkpoint")
+        if resume_checkpoint is not None:
+            if not isinstance(resume_checkpoint, str) or not Path(
+                resume_checkpoint
+            ).is_absolute():
+                raise ValueError("resume_checkpoint must be absolute")
+            resolved_run = Path(run_dir).resolve()
+            resolved_checkpoint = Path(resume_checkpoint).resolve()
+            try:
+                resolved_checkpoint.relative_to(resolved_run)
+            except ValueError as exc:
+                raise ValueError("resume checkpoint escapes run directory") from exc
+            if not resolved_checkpoint.is_file():
+                raise ValueError("resume checkpoint is unavailable")
+            resume_checkpoint = str(resolved_checkpoint)
         return cls(
             base_model=base_model,
             dataset_yaml=_absolute_path(values, "dataset_yaml"),
-            run_dir=_absolute_path(values, "run_dir"),
+            run_dir=run_dir,
             model_cache_dir=_absolute_path(values, "model_cache_dir"),
             epochs=epochs,
             imgsz=imgsz,
             batch=batch,
             device=device,
             patience=patience,
+            resume_checkpoint=resume_checkpoint,
         )
 
     def to_json(self) -> dict[str, object]:
-        return asdict(self)
+        payload = asdict(self)
+        if payload["resume_checkpoint"] is None:
+            del payload["resume_checkpoint"]
+        return payload
 
 
 @dataclass(frozen=True, slots=True)

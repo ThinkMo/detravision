@@ -1,0 +1,366 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+
+import pytest
+from sqlalchemy import select
+
+from backend.core.config import Settings
+from backend.db.migrate import run_migrations
+from backend.db.models import ModelVersion, User
+from backend.db.repositories import Repository
+from backend.db.session import create_engine_from_url, create_session_factory
+from backend.training.catalog import TrainingRequest
+from backend.training.repository import TrainingRepository
+from backend.training.service import TrainingService, TrainingServiceError
+from backend.training.storage import TrainingStorage
+
+
+class ManagerSpy:
+    def __init__(self):
+        self.wakes = 0
+
+    def wake(self):
+        self.wakes += 1
+
+
+@pytest.fixture
+def service_context(tmp_path: Path):
+    database_url = "sqlite:///" + (tmp_path / "service.db").as_posix()
+    run_migrations(database_url)
+    engine = create_engine_from_url(database_url)
+    session_factory = create_session_factory(engine)
+    with session_factory.begin() as session:
+        admin = User(
+            username="admin",
+            password_hash="unused",
+            role="admin",
+            enabled=True,
+            must_change_password=False,
+        )
+        session.add(admin)
+        session.flush()
+        admin_id = admin.id
+    dataset = tmp_path / "private" / "helmet.yaml"
+    dataset.parent.mkdir()
+    dataset.write_text(
+        "train: train\nval: val\ntest: test\nnames: [person, helmet, no_helmet]\n",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        database_url=database_url,
+        training_dataset_yaml=dataset,
+        training_run_dir=tmp_path / "runs",
+        training_model_cache_dir=tmp_path / "models",
+    )
+    repository = TrainingRepository(session_factory)
+    model_repository = Repository(session_factory)
+    storage = TrainingStorage(settings)
+    manager = ManagerSpy()
+    service = TrainingService(
+        repository, storage, model_repository, manager, settings
+    )
+    try:
+        yield (
+            service,
+            repository,
+            storage,
+            manager,
+            session_factory,
+            admin_id,
+            settings,
+        )
+    finally:
+        engine.dispose()
+
+
+def request(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "executor": "local",
+        "base_model": "yolo11m.pt",
+        "imgsz": 640,
+        "epochs": 3,
+        "batch": "4",
+        "device": "cpu",
+        "patience": 2,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_create_writes_complete_manifest_before_queue_commit_and_is_idempotent(
+    service_context,
+):
+    """Catches a claimable job without a manifest or duplicate retry directory."""
+    service, repository, storage, manager, _factory, admin_id, _settings = service_context
+    original_create = repository.create_job
+    observed_manifest: dict[str, object] = {}
+
+    def asserting_create(values):
+        nonlocal observed_manifest
+        manifest = storage.run_path(values["run_key"]) / "manifest.json"
+        observed_manifest = json.loads(manifest.read_text(encoding="utf-8"))
+        return original_create(values)
+
+    repository.create_job = asserting_create
+    first = service.create(
+        created_by=admin_id,
+        request=request(),
+        idempotency_key="create-model-001",
+    )
+    second = service.create(
+        created_by=admin_id,
+        request=TrainingRequest(**request()),
+        idempotency_key="create-model-001",
+    )
+
+    assert second["id"] == first["id"]
+    assert observed_manifest["base_model"] == "yolo11m.pt"
+    assert observed_manifest["dataset_yaml"] == str(storage.dataset_yaml)
+    assert Path(str(observed_manifest["run_dir"])).is_relative_to(storage.root)
+    assert observed_manifest.get("resume_checkpoint") is None
+    assert repository.list_jobs()["total"] == 1
+    assert len(list(storage.root.iterdir())) == 1
+    assert manager.wakes == 2
+
+
+def test_create_rejects_reusing_idempotency_key_for_different_configuration(
+    service_context,
+):
+    """Catches one retry key silently returning an unrelated training job."""
+    service, repository, storage, _manager, _factory, admin_id, _settings = service_context
+    service.create(
+        created_by=admin_id,
+        request=request(imgsz=640),
+        idempotency_key="configuration-key-1",
+    )
+
+    with pytest.raises(TrainingServiceError) as captured:
+        service.create(
+            created_by=admin_id,
+            request=request(imgsz=960),
+            idempotency_key="configuration-key-1",
+        )
+
+    assert captured.value.code == "idempotency_conflict"
+    assert repository.list_jobs()["total"] == 1
+    assert len(list(storage.root.iterdir())) == 1
+
+
+@pytest.mark.parametrize(
+    ("payload", "code"),
+    [
+        (request(executor="remote"), "executor_unavailable"),
+        (request(base_model="../../private.pt"), "invalid_training_request"),
+    ],
+)
+def test_create_maps_untrusted_requests_to_stable_errors(service_context, payload, code):
+    """Catches raw catalog validation details or paths escaping the service boundary."""
+    service, _repository, _storage, _manager, _factory, admin_id, _settings = service_context
+
+    with pytest.raises(TrainingServiceError) as captured:
+        service.create(
+            created_by=admin_id,
+            request=payload,
+            idempotency_key="invalid-request-01",
+        )
+
+    assert captured.value.code == code
+    assert "private" not in captured.value.message.casefold()
+
+
+def test_create_rejects_unavailable_dataset_before_allocating_run(service_context):
+    """Catches a known-invalid configured dataset being queued for the worker."""
+    service, _repository, storage, _manager, _factory, admin_id, settings = service_context
+    settings.training_dataset_yaml.unlink()
+
+    with pytest.raises(TrainingServiceError) as captured:
+        service.create(
+            created_by=admin_id,
+            request=request(),
+            idempotency_key="missing-dataset-1",
+        )
+
+    assert captured.value.code == "dataset_unavailable"
+    assert not storage.root.exists()
+
+
+def test_create_removes_new_run_when_database_persistence_fails(service_context):
+    """Catches orphaned manifests and directories after a queue insert failure."""
+    service, repository, storage, _manager, _factory, admin_id, _settings = service_context
+
+    def fail_create(_values):
+        raise RuntimeError("database unavailable")
+
+    repository.create_job = fail_create
+    with pytest.raises(TrainingServiceError) as captured:
+        service.create(
+            created_by=admin_id,
+            request=request(),
+            idempotency_key="database-failure-1",
+        )
+
+    assert captured.value.code == "training_create_failed"
+    assert list(storage.root.iterdir()) == []
+
+
+def test_missing_job_operations_return_one_stable_error(service_context):
+    """Catches repository None values surfacing as unsafe attribute errors."""
+    service, _repository, _storage, _manager, _factory, _admin_id, _settings = service_context
+
+    for operation in (
+        lambda: service.get_job(999),
+        lambda: service.request_stop(999),
+        lambda: service.resume(999, idempotency_key="resume-missing-1"),
+        lambda: service.register_model(999),
+    ):
+        with pytest.raises(TrainingServiceError) as captured:
+            operation()
+        assert captured.value.code == "training_job_not_found"
+
+
+def make_resumable(repository, storage, admin_id: int):
+    created = repository.create_job(
+        {
+            "created_by": admin_id,
+            "executor": "local",
+            "base_model": "yolo26l.pt",
+            "dataset_key": "configured",
+            "epochs": 20,
+            "imgsz": 960,
+            "batch": "2",
+            "device": "0",
+            "patience": 5,
+            "run_key": storage.create_run(),
+            "idempotency_key": "resume-source-1",
+        }
+    )
+    running = repository.claim_next()
+    source_last = storage.resolve_artifact(created["run_key"], "last")
+    source_last.parent.mkdir(parents=True)
+    source_last.write_bytes(b"checkpoint-to-resume")
+    repository.mark_terminal(
+        running["id"], status="interrupted", has_last=True
+    )
+    return repository.get_job(created["id"]), source_last
+
+
+def test_resume_copies_only_contained_last_checkpoint_into_new_manifest(service_context):
+    """Catches resume starting fresh or handing the worker an old/uncontained path."""
+    service, repository, storage, manager, _factory, admin_id, _settings = service_context
+    source, source_last = make_resumable(repository, storage, admin_id)
+
+    resumed = service.resume(source["id"], idempotency_key="resume-attempt-1")
+
+    manifest_path = storage.run_path(resumed["run_key"]) / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    checkpoint = Path(manifest["resume_checkpoint"])
+    assert checkpoint.is_relative_to(storage.run_path(resumed["run_key"]))
+    assert checkpoint.read_bytes() == source_last.read_bytes()
+    assert resumed["resume_from_id"] == source["id"]
+    assert manager.wakes == 1
+
+
+def test_resume_rejects_last_checkpoint_symlink_that_escapes_storage(service_context):
+    """Catches a persisted has_last flag authorizing a symlinked external model."""
+    service, repository, storage, _manager, _factory, admin_id, _settings = service_context
+    source, source_last = make_resumable(repository, storage, admin_id)
+    source_last.unlink()
+    outside = storage.root.parent / "outside.pt"
+    outside.write_bytes(b"outside")
+    try:
+        source_last.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
+
+    with pytest.raises(TrainingServiceError) as captured:
+        service.resume(source["id"], idempotency_key="resume-escaped-1")
+
+    assert captured.value.code == "resume_checkpoint_unavailable"
+
+
+def completed_job(repository, storage, admin_id: int):
+    created = repository.create_job(
+        {
+            "created_by": admin_id,
+            "executor": "local",
+            "base_model": "yolo11l.pt",
+            "dataset_key": "configured",
+            "epochs": 10,
+            "imgsz": 640,
+            "batch": "4",
+            "device": "0",
+            "patience": 3,
+            "run_key": storage.create_run(),
+            "idempotency_key": "completed-source-1",
+        }
+    )
+    running = repository.claim_next()
+    best = storage.resolve_artifact(created["run_key"], "best")
+    best.parent.mkdir(parents=True)
+    best.write_bytes(b"trained best checkpoint")
+    digest = hashlib.sha256(best.read_bytes()).hexdigest()
+    metrics = {
+        "precision": 0.89,
+        "recall": 0.93,
+        "map50": 0.90,
+        "map50_95": 0.67,
+        "classes": {
+            "no_helmet": {
+                "precision": 0.87,
+                "recall": 0.92,
+                "map50": 0.9,
+                "map50_95": 0.65,
+            }
+        },
+        "no_helmet_precision": 0.87,
+        "no_helmet_recall": 0.92,
+        "accepted": True,
+    }
+    repository.mark_terminal(
+        running["id"],
+        status="completed",
+        metrics=metrics,
+        has_best=True,
+        best_sha256=digest,
+    )
+    return repository.get_job(created["id"]), best
+
+
+def test_register_model_requires_unchanged_completed_best_and_keeps_candidate_inactive(
+    service_context,
+):
+    """Catches auto-activation, lost provenance, or registering changed weights."""
+    service, repository, storage, _manager, factory, admin_id, _settings = service_context
+    job, best = completed_job(repository, storage, admin_id)
+
+    candidate = service.register_model(job["id"], name="helmet candidate")
+
+    assert "file_path" not in candidate
+    with factory() as session:
+        row = session.scalar(
+            select(ModelVersion).where(ModelVersion.training_job_id == job["id"])
+        )
+        assert row is not None
+        assert row.file_path == str(best.resolve())
+        assert row.is_active is False
+        assert row.source == "training"
+        assert row.base_model == "yolo11l.pt"
+        assert row.imgsz == 640
+        assert json.loads(row.metrics_json)["classes"]["no_helmet"]["recall"] == 0.92
+
+
+def test_register_model_rejects_best_changed_after_evaluation(service_context):
+    """Catches a replaced checkpoint bypassing the held-out evaluation digest."""
+    service, repository, storage, _manager, factory, admin_id, _settings = service_context
+    job, best = completed_job(repository, storage, admin_id)
+    best.write_bytes(b"changed after evaluation")
+
+    with pytest.raises(TrainingServiceError) as captured:
+        service.register_model(job["id"])
+
+    assert captured.value.code == "model_artifact_changed"
+    with factory() as session:
+        assert session.scalar(select(ModelVersion.id)) is None

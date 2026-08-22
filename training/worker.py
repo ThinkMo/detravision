@@ -168,9 +168,18 @@ def _execute_manifest(
         device = resolve_device(manifest.device, cuda_available)
         batch = _batch(manifest.batch)
         try:
-            model = yolo_cls(
-                _base_model_reference(manifest, project_root.resolve(), model_cache_dir)
-            )
+            if manifest.resume_checkpoint is not None:
+                resume_checkpoint = _contained(
+                    Path(manifest.resume_checkpoint), run_dir
+                )
+                if not resume_checkpoint.is_file():
+                    raise FileNotFoundError("resume checkpoint unavailable")
+                model_reference = str(resume_checkpoint)
+            else:
+                model_reference = _base_model_reference(
+                    manifest, project_root.resolve(), model_cache_dir
+                )
+            model = yolo_cls(model_reference)
         except Exception:
             raise WorkerFailure("weights_unavailable")
 
@@ -184,7 +193,7 @@ def _execute_manifest(
 
         model.add_callback("on_fit_epoch_end", on_train_epoch_end)
         try:
-            model.train(
+            train_arguments = dict(
                 data=manifest.dataset_yaml,
                 epochs=manifest.epochs,
                 imgsz=manifest.imgsz,
@@ -196,6 +205,12 @@ def _execute_manifest(
                 exist_ok=True,
                 patience=manifest.patience,
             )
+            if manifest.resume_checkpoint is not None:
+                train_arguments["resume"] = True
+                train_arguments["save_dir"] = str(
+                    _contained(run_dir / "train", run_dir)
+                )
+            model.train(**train_arguments)
             best_path = _copy_canonical_weights(run_dir)
         except Exception as exc:
             if _is_cuda_oom(exc):
