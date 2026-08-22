@@ -191,6 +191,36 @@ def test_tail_log_scrubs_network_paths_and_local_file_uris_only(tmp_path: Path):
     assert "left//right" in result
 
 
+def test_tail_log_scrubs_slash_unc_paths_after_punctuation(tmp_path: Path):
+    """Catches punctuated slash-UNC paths bypassing the line safety boundary."""
+    storage = make_storage(tmp_path, tail_bytes=4096)
+    run_key = storage.create_run()
+    storage.resolve_artifact(run_key, "log").write_text(
+        "bracket=[//server/share/private/best.pt]\n"
+        "paths=[//server/share/a,//server/two/b]\n"
+        "object={//server/share/private/key}\n"
+        "comma=value,//server/share/private/item\n"
+        "docs=https://example.test/training/help\n"
+        "api=http://localhost:8000/health\n"
+        "division=left//right\n",
+        encoding="utf-8",
+    )
+
+    result = storage.tail_log(run_key, limit=4096)
+
+    for secret in (
+        "//server/share/private/best.pt",
+        "//server/share/a",
+        "//server/two/b",
+        "//server/share/private/key",
+        "//server/share/private/item",
+    ):
+        assert secret not in result
+    assert "https://example.test/training/help" in result
+    assert "http://localhost:8000/health" in result
+    assert "left//right" in result
+
+
 def test_tail_log_does_not_leak_a_path_when_read_starts_in_its_middle(tmp_path: Path):
     """Catches byte-tail seeking exposing a suffix of an absolute private path."""
     storage = make_storage(tmp_path, tail_bytes=128)

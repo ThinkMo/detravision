@@ -28,7 +28,7 @@ _POSIX_PATH = re.compile(
 )
 _FILE_URI = re.compile(r"(?i)\bfile://[^\r\n\t\s]+")
 _SLASH_UNC_PATH = re.compile(
-    r"(?:^|[\s=('\"])//[^\r\n\t\s/]+/[^\r\n\t\s]+"
+    r"(?<![\w:/])//[^\r\n\t\s/]+/[^\r\n\t\s]+"
 )
 
 
