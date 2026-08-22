@@ -1,8 +1,9 @@
-import { Download, Image as ImageIcon } from "lucide-react";
+import { Image as ImageIcon, X } from "lucide-react";
 import { useState } from "react";
 import type { BatchImageResult } from "../api/types";
+import { ModalDialog } from "../admin/shared";
 import { StatusBadge } from "../components/StatusBadge";
-import { safePreviewUrl, safeResultUrl } from "./batchApi";
+import { safePreviewUrl } from "./batchApi";
 
 const detectionLabels: Record<string, string> = {
   helmet_worn: "已佩戴安全帽",
@@ -16,7 +17,7 @@ function detectionLabel(label: string) {
 export function ResultCard({ jobId, image }: { jobId: number; image: BatchImageResult }) {
   const [previewFailed, setPreviewFailed] = useState(false);
   const [previewRetryKey, setPreviewRetryKey] = useState(0);
-  const resultUrl = image.status === "completed" ? safeResultUrl(jobId, image.id, image.result_url) : null;
+  const [enlarged, setEnlarged] = useState(false);
   const previewUrl = image.status === "completed" ? safePreviewUrl(jobId, image.id, image.preview_url) : null;
   const previewSrc = previewUrl && !previewFailed ? `${previewUrl}${previewRetryKey ? `?retry=${previewRetryKey}` : ""}` : null;
   const violations = image.detections.filter((item) => item.label === "no_helmet");
@@ -25,7 +26,7 @@ export function ResultCard({ jobId, image }: { jobId: number; image: BatchImageR
   return (
     <article className={`batch-result batch-result--${image.status}`} aria-label={`${image.display_name} 识别结果`}>
       <div className="batch-result__image">
-        {previewSrc ? <img src={previewSrc} alt={`${image.display_name} 标注结果`} onError={() => setPreviewFailed(true)} /> : previewUrl && previewFailed ? <div className="batch-result__preview-error"><span>预览加载失败</span><button type="button" onClick={() => { setPreviewFailed(false); setPreviewRetryKey((key) => key + 1); }}>重新加载预览</button></div> : <ImageIcon aria-hidden="true" size={32} />}
+        {previewSrc ? <button className="batch-result__preview-trigger" type="button" aria-label={`放大预览 ${image.display_name} 标注结果`} onClick={() => setEnlarged(true)}><img src={previewSrc} alt={`${image.display_name} 标注结果`} onError={() => setPreviewFailed(true)} /></button> : previewUrl && previewFailed ? <div className="batch-result__preview-error"><span>预览加载失败</span><button type="button" onClick={() => { setPreviewFailed(false); setPreviewRetryKey((key) => key + 1); }}>重新加载预览</button></div> : <ImageIcon aria-hidden="true" size={32} />}
       </div>
       <div className="batch-result__body">
         <div className="batch-result__heading"><div><h3>{image.display_name}</h3><span>{image.model_version_id === null ? "模型待定" : `模型 #${image.model_version_id}`}</span></div><StatusBadge tone={image.status === "completed" ? "safe" : image.status === "failed" ? "danger" : "neutral"}>{statusLabel}</StatusBadge></div>
@@ -36,8 +37,8 @@ export function ResultCard({ jobId, image }: { jobId: number; image: BatchImageR
           {context.length ? <ul className="batch-detections batch-detections--context" aria-label="其他识别对象">{context.map((detection, index) => <li key={`${detection.label}-${index}`}><span>{detectionLabel(detection.label)}</span><strong>{Math.round(detection.confidence * 100)}%</strong></li>)}</ul> : null}
           {!image.detections.length ? <p className="batch-result__empty">未检测到目标</p> : null}
         </> : null}
-        {resultUrl ? <a className="batch-download" href={resultUrl} download><Download aria-hidden="true" size={16} />下载 {image.display_name} 标注图</a> : null}
       </div>
+      {enlarged && previewSrc ? <ModalDialog title={`${image.display_name} 标注结果预览`} className="batch-preview-dialog" onClose={() => setEnlarged(false)}><button className="batch-preview-dialog__close" type="button" aria-label="关闭预览" onClick={() => setEnlarged(false)}><X aria-hidden="true" size={20} /></button><img className="batch-preview-dialog__image" src={previewSrc} alt={`${image.display_name} 放大标注结果`} /></ModalDialog> : null}
     </article>
   );
 }

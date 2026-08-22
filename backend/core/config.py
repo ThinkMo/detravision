@@ -21,6 +21,9 @@ class Settings:
     cookie_secure: bool = _bool_env("COOKIE_SECURE", False)
     snapshot_dir: Path = Path(os.getenv("SNAPSHOT_DIR", "data/snapshots"))
     model_path: str | None = os.getenv("MODEL_PATH")
+    annotation_font_path: Path | None = (
+        Path(value) if (value := os.getenv("ANNOTATION_FONT_PATH")) else None
+    )
     batch_retention_days: int = int(os.getenv("BATCH_RETENTION_DAYS", "30"))
     batch_worker_count: int = int(os.getenv("BATCH_WORKER_COUNT", "1"))
     worker_count: int = int(os.getenv("WORKER_COUNT", "1"))

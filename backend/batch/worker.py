@@ -4,6 +4,7 @@ import io
 import logging
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -29,6 +30,7 @@ class BatchWorker:
         provider: DetectorProvider,
         storage: FileStorage,
         *,
+        annotation_font_path: str | Path | None = None,
         poll_interval: float = 0.5,
         thread_factory: Callable[..., threading.Thread] = threading.Thread,
     ) -> None:
@@ -37,6 +39,7 @@ class BatchWorker:
         self._repository = repository
         self._provider = provider
         self._storage = storage
+        self._annotation_font_path = annotation_font_path
         self._poll_interval = poll_interval
         self._thread_factory = thread_factory
         self._stop_event = threading.Event()
@@ -109,7 +112,11 @@ class BatchWorker:
                 displayed_detections = compliance_display_detections(
                     prediction.detections
                 )
-                rendered = annotate(image, displayed_detections)
+                rendered = annotate(
+                    image,
+                    displayed_detections,
+                    font_path=self._annotation_font_path,
+                )
                 encoded_ok, output = cv2.imencode(
                     ".jpg",
                     rendered,

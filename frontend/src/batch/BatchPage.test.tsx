@@ -286,7 +286,7 @@ it("polls until a partially failed task reaches a terminal state", async () => {
   expect(detailCalls).toBe(2);
 });
 
-it("renders canonical previews with violation-first result details and authenticated downloads", async () => {
+it("opens an enlarged annotated preview and does not offer downloads", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
     if (path === "/api/auth/me") return json(currentUser);
@@ -306,11 +306,21 @@ it("renders canonical previews with violation-first result details and authentic
   expect(violation.compareDocumentPosition(contextualDetection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(within(card).getByText("未佩戴安全帽").closest("li")).toHaveTextContent("91%");
   expect(within(card).getByText("已佩戴安全帽").closest("li")).toHaveTextContent("76%");
-  expect(within(card).getByRole("link", { name: "下载 north-gate.jpg 标注图" })).toHaveAttribute(
-    "href",
-    "/api/batch-jobs/12/images/31/download",
+  const previewTrigger = within(card).getByRole("button", { name: "放大预览 north-gate.jpg 标注结果" });
+  await userEvent.click(previewTrigger);
+  const dialog = screen.getByRole("dialog", { name: "north-gate.jpg 标注结果预览" });
+  expect(within(dialog).getByRole("img", { name: "north-gate.jpg 放大标注结果" })).toHaveAttribute(
+    "src",
+    "/api/batch-jobs/12/images/31/preview",
   );
-  expect(screen.getByRole("link", { name: "下载全部结果 ZIP" })).toHaveAttribute("href", "/api/batch-jobs/12/download");
+  expect(screen.queryByRole("link", { name: /下载/ })).not.toBeInTheDocument();
+  fireEvent.mouseDown(dialog.parentElement!);
+  expect(dialog).not.toBeInTheDocument();
+  expect(previewTrigger).toHaveFocus();
+  await userEvent.click(previewTrigger);
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog", { name: "north-gate.jpg 标注结果预览" })).not.toBeInTheDocument();
+  expect(previewTrigger).toHaveFocus();
   expect(document.body).not.toHaveTextContent("batch-source");
 });
 

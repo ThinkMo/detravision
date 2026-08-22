@@ -72,11 +72,6 @@ export function createBatchJob(files: File[], onProgress: (percent: number) => v
   });
 }
 
-export function safeResultUrl(jobId: number, imageId: number, value: string) {
-  const expected = `/api/batch-jobs/${jobId}/images/${imageId}/download`;
-  return value === expected ? value : null;
-}
-
 export function safePreviewUrl(jobId: number, imageId: number, value: string) {
   const expected = `/api/batch-jobs/${jobId}/images/${imageId}/preview`;
   return value === expected ? value : null;

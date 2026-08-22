@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -24,10 +26,40 @@ _STYLES = {
     "helmet": AnnotationStyle((76, 138, 102), 2),
 }
 
-_DISPLAY_LABELS = {
+_CHINESE_LABELS = {
     "no_helmet": "未佩戴安全帽",
     "helmet_worn": "已佩戴安全帽",
 }
+
+_ASCII_LABELS = {
+    "no_helmet": "NO HELMET",
+    "helmet_worn": "HELMET OK",
+}
+
+_SYSTEM_CHINESE_FONTS = (
+    Path("C:/Windows/Fonts/msyh.ttc"),
+    Path("C:/Windows/Fonts/simhei.ttf"),
+    Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+    Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
+)
+
+
+def annotation_label(label: str, *, supports_chinese: bool) -> str:
+    labels = _CHINESE_LABELS if supports_chinese else _ASCII_LABELS
+    return labels.get(label, label)
+
+
+@lru_cache(maxsize=16)
+def _annotation_font(font_path: str | None, size: int) -> tuple[ImageFont.ImageFont, bool]:
+    candidates = ([Path(font_path)] if font_path else []) + list(_SYSTEM_CHINESE_FONTS)
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        try:
+            return ImageFont.truetype(str(candidate), size=size), True
+        except OSError:
+            continue
+    return ImageFont.load_default(), False
 
 
 def _color(label: str) -> tuple[int, int, int]:
@@ -45,14 +77,23 @@ def _coordinate(value: float, maximum: int) -> int:
     return max(0, min(maximum, int(round(value))))
 
 
-def annotate(image: np.ndarray, detections: list[Detection]) -> np.ndarray:
+def annotate(
+    image: np.ndarray,
+    detections: list[Detection],
+    *,
+    font_path: str | Path | None = None,
+) -> np.ndarray:
     """Draw deterministic, bounds-safe labels on a BGR OpenCV image."""
     if image.ndim != 3 or image.shape[2] != 3:
         raise ValueError("annotation requires a three-channel image")
     height, width = image.shape[:2]
     canvas = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
     draw = ImageDraw.Draw(canvas)
-    font = ImageFont.load_default()
+    font_size = max(14, min(30, round(min(width, height) * 0.025)))
+    font, supports_chinese = _annotation_font(
+        str(font_path) if font_path is not None else None,
+        font_size,
+    )
 
     for detection in detections:
         x1, y1, x2, y2 = detection.bbox
@@ -64,7 +105,7 @@ def annotate(image: np.ndarray, detections: list[Detection]) -> np.ndarray:
         draw.rectangle(
             (left, top, right, bottom), outline=style.color, width=style.width
         )
-        label = f"{_DISPLAY_LABELS.get(detection.label, detection.label)} {detection.confidence:.2f}"
+        label = f"{annotation_label(detection.label, supports_chinese=supports_chinese)} {detection.confidence:.2f}"
         label_box = draw.textbbox((0, 0), label, font=font)
         label_width = label_box[2] - label_box[0] + 4
         label_height = label_box[3] - label_box[1] + 4

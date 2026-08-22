@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from backend.batch import BatchRepository, PendingImage, RetentionCleaner, annotate
+from backend.batch.annotate import annotation_label
 from backend.batch.worker import BatchWorker
 from backend import main as main_module
 from backend.core.config import Settings
@@ -191,6 +192,12 @@ def test_annotation_prioritizes_helmet_violation_with_explicit_styles():
     assert tuple(annotated[24, 30]) == (255, 255, 255)
     assert tuple(annotated[24, 52]) == (102, 138, 76)
     assert tuple(annotated[24, 54]) == (102, 138, 76)
+
+
+def test_annotation_label_falls_back_to_ascii_when_chinese_font_is_unavailable():
+    assert annotation_label("no_helmet", supports_chinese=False) == "NO HELMET"
+    assert annotation_label("helmet_worn", supports_chinese=False) == "HELMET OK"
+    assert annotation_label("no_helmet", supports_chinese=True) == "未佩戴安全帽"
 
 
 def test_worker_marks_detected_person_without_helmet_as_violation(batch_context):

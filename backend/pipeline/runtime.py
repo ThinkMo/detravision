@@ -187,7 +187,11 @@ class RuntimeManager:
             import cv2
 
             displayed_detections = compliance_display_detections(detections)
-            rendered = annotate(frame.image, displayed_detections)
+            rendered = annotate(
+                frame.image,
+                displayed_detections,
+                font_path=self.settings.annotation_font_path,
+            )
             ok, encoded = cv2.imencode(
                 ".jpg", rendered, [int(cv2.IMWRITE_JPEG_QUALITY), 75]
             )

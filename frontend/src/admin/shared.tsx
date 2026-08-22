@@ -11,7 +11,7 @@ export function AdminNotice({ message, error = false }: { message: string; error
 
 const focusableSelector = "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])";
 
-export function ModalDialog({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+export function ModalDialog({ title, children, onClose, className = "" }: { title: string; children: ReactNode; onClose: () => void; className?: string }) {
   const dialogRef = useRef<HTMLElement | null>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
   const titleId = useId();
@@ -57,8 +57,8 @@ export function ModalDialog({ title, children, onClose }: { title: string; child
   };
 
   return createPortal(
-    <div className="admin-dialog-backdrop">
-      <section ref={dialogRef} className="admin-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onKeyDown={onKeyDown}>
+    <div className="admin-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <section ref={dialogRef} className={`admin-dialog${className ? ` ${className}` : ""}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onKeyDown={onKeyDown}>
         <h2 id={titleId}>{title}</h2>
         {children}
       </section>

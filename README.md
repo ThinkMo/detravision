@@ -216,6 +216,7 @@ $env:REAL_MODEL_TEST_IMAGE_DIR = (Resolve-Path "datasets/construction-ppe/images
 | `UPLOAD_DIR` | `data/uploads` | Logo 与后续上传文件的本地存储目录 |
 | `SNAPSHOT_DIR` | `data/snapshots` | 告警抓拍目录 |
 | `MODEL_PATH` | 空 | 启动时加载的 PT/ONNX/Engine 模型 |
+| `ANNOTATION_FONT_PATH` | 空 | 可选中文 TTF/TTC 字体；未配置时自动查找常见系统中文字体，找不到则使用英文标注避免乱码 |
 | `BATCH_RETENTION_DAYS` | `30` | 多图任务、原图及标注结果的保留天数，必须大于 0 |
 | `BATCH_WORKER_COUNT` | `1` | 当前版本固定为 1；其他值会拒绝启动 |
 | `WORKER_COUNT` | `1` | 推理线程数；单 GPU 建议从 1 开始压测 |
