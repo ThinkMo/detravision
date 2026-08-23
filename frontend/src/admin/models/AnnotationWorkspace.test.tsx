@@ -35,6 +35,15 @@ it("loads pending test images, draws a box and saves the annotation", async () =
   fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, pointerId: 1 });
   fireEvent.pointerMove(canvas, { clientX: 300, clientY: 300, pointerId: 1 });
   fireEvent.pointerUp(canvas, { clientX: 300, clientY: 300, pointerId: 1 });
+  expect(screen.getByText("标注框（1）")).toBeVisible();
+  fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+  expect(screen.getByText("标注框（0）")).toBeVisible();
+  fireEvent.pointerDown(canvas, { clientX: 100, clientY: 100, pointerId: 2 });
+  fireEvent.pointerMove(canvas, { clientX: 300, clientY: 300, pointerId: 2 });
+  fireEvent.pointerUp(canvas, { clientX: 300, clientY: 300, pointerId: 2 });
+  expect(screen.getByRole("button", { name: "确认无目标" })).toHaveClass("annotation-button", "annotation-button--secondary");
+  expect(screen.getByRole("button", { name: "保存标注" })).toHaveClass("annotation-button", "annotation-button--primary");
+  expect(screen.getByRole("button", { name: "添加类别" })).toHaveClass("annotation-button", "annotation-button--primary");
   await userEvent.click(screen.getByRole("button", { name: "保存标注" }));
   await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/training/datasets/2/images/9/annotations", expect.objectContaining({ method: "PUT" })));
   expect(screen.getByRole("status")).toHaveTextContent("标注已保存");
