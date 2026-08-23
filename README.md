@@ -77,8 +77,35 @@ frontend/dist/          # 前端生产构建，可由 npm run build 重建
 
 ### 前置环境
 
-- Python 3.11 或 3.12。
+- Python 3.12 或更高版本。
 - Node.js 24.x。前端 `package.json` 明确要求 `>=24 <25`；先运行 `node --version`，必须显示 `v24.*`。本机系统 PATH 若仍显示 `v16.*`，请安装 Node.js 24 LTS、重新打开终端，再继续执行前端命令。
+
+### 本地一键启动（推荐）
+
+Windows 在项目根目录双击 `start.cmd`，或运行：
+
+```powershell
+.\start.cmd
+```
+
+Linux 在项目根目录运行：
+
+```bash
+chmod +x start.sh
+./start.sh
+```
+
+首次运行会自动创建 `.venv`、安装缺失的后端与前端依赖、构建前端，并在 <http://127.0.0.1:8000/> 启动同源服务。再次运行会复用已有依赖；按 `Ctrl+C` 停止。启动器会读取可选的 `.env`，但不会覆盖当前终端已经设置的环境变量。
+
+已有依赖和 `frontend/dist` 时可快速启动：
+
+```powershell
+.\start.cmd --skip-install --skip-build
+```
+
+Linux 使用相同参数：`./start.sh --skip-install --skip-build`。完整参数、配置优先级和故障处理见 [Windows / Linux 本地一键启动](docs/local-start.md)。该脚本只用于本地 SQLite 单实例开发与验收，不替代生产 MySQL 部署流程。
+
+### 手动安装
 
 创建虚拟环境并安装后端依赖：
 
@@ -97,7 +124,7 @@ npm ci
 cd ..
 ```
 
-参考 `.env.example`，在当前终端设置所需环境变量。程序不会自动读取 `.env`，因此直接运行 Uvicorn 时必须由终端或进程管理器注入配置。
+参考 `.env.example`，在当前终端设置所需环境变量。直接运行 Uvicorn 不会自动读取 `.env`，必须由终端或进程管理器注入配置；上述一键启动器会安全读取项目根目录的 `.env`。
 
 开发环境默认使用 `sqlite:///data/safety_detect.db`。首次启动会自动执行 Alembic 迁移；若用户表为空，会创建管理员 `admin`。未设置 `ADMIN_INITIAL_PASSWORD` 时，开发环境的临时密码是 `admin123456`。
 
