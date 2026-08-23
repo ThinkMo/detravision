@@ -37,17 +37,17 @@ export function TrainingDatasetsPanel({ onAnnotate }: Props) {
     {query.data?.items.length ? <div className="dataset-version-grid">{query.data.items.map((item) => {
       const editing = item.status === "editing";
       return <article className="admin-card dataset-version-card" key={item.id}>
-        <header><div><h3>{item.name}</h3><small>{item.root_alias} / {item.directory}</small></div><span className={`dataset-status dataset-status--${item.status}`}>v{item.version} · {editing ? "编辑中" : "已发布"}</span></header>
+        <header><div><h3>{item.name}</h3><small>{item.root_alias} / {item.directory}</small></div><span className={`dataset-status dataset-status--${item.status}`}>v{item.version ?? 1} · {editing ? "编辑中" : "已发布"}</span></header>
         <p>{item.classes.join("、")}</p>
         <footer>
           {editing ? <>
-            <button type="button" onClick={() => onAnnotate?.(item)}>继续标注</button>
-            <button type="button" className="table-action" disabled={rescan.isPending} onClick={() => rescan.mutate(item.id)}>重新扫描图片</button>
-            <button type="button" className="table-action" disabled={validate.isPending} onClick={() => validate.mutate(item.id)}>校验</button>
-            <button type="button" className="table-action" onClick={() => setPublishing(item)}>发布</button>
+            <button type="button" className="dataset-action dataset-action--primary" onClick={() => onAnnotate?.(item)}>继续标注</button>
+            <button type="button" className="dataset-action dataset-action--secondary" disabled={rescan.isPending} onClick={() => rescan.mutate(item.id)}>重新扫描图片</button>
+            <button type="button" className="dataset-action dataset-action--secondary" disabled={validate.isPending} onClick={() => validate.mutate(item.id)}>校验</button>
+            <button type="button" className="dataset-action dataset-action--primary" onClick={() => setPublishing(item)}>发布</button>
           </> : <>
-            <button type="button" disabled={clone.isPending} onClick={() => clone.mutate(item.id)}>创建编辑版本</button>
-            {item.enabled ? <button type="button" className="table-action table-action--danger" onClick={() => { disable.reset(); setDisabling(item); }}>停用</button> : null}
+            <button type="button" className="dataset-action dataset-action--primary" disabled={clone.isPending} onClick={() => clone.mutate(item.id)}>创建编辑版本</button>
+            {item.enabled ? <button type="button" className="dataset-action dataset-action--danger" onClick={() => { disable.reset(); setDisabling(item); }}>停用</button> : null}
           </>}
         </footer>
       </article>;

@@ -22,6 +22,18 @@ function renderPanel() {
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
+it("uses consistent styled actions and a safe version label", async () => {
+  const legacy = { ...published, version: undefined } as unknown as TrainingDataset;
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ items: [legacy] })));
+  renderPanel();
+
+  const createButton = await screen.findByRole("button", { name: "创建编辑版本" });
+  const disableButton = screen.getByRole("button", { name: "停用" });
+  expect(createButton).toHaveClass("dataset-action", "dataset-action--primary");
+  expect(disableButton).toHaveClass("dataset-action", "dataset-action--danger");
+  expect(screen.getByText("v1 · 已发布")).toBeVisible();
+});
+
 it("creates an editing version and exposes only editing actions", async () => {
   let items: TrainingDataset[] = [published];
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
