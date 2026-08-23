@@ -131,6 +131,9 @@
 .annotation-layout { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 16px; min-height: 560px; }
 .annotation-sidebar { display: flex; flex-direction: column; gap: 10px; border: 1px solid #dce5e2; border-radius: 16px; padding: 14px; background: #fff; overflow: hidden; }
 .annotation-sidebar label { display: grid; gap: 6px; }
+.annotation-class-legend { display: flex; flex-wrap: wrap; gap: .4rem .7rem; color: var(--color-text-muted); font-size: .76rem; }
+.annotation-class-legend span, .annotation-box-list li > span { display: inline-flex; align-items: center; gap: .4rem; }
+.annotation-class-legend i, .annotation-class-dot { width: .65rem; height: .65rem; flex: 0 0 auto; border-radius: 999px; }
 .annotation-image-list { display: grid; gap: 6px; max-height: 250px; overflow: auto; }
 .annotation-image-list button { display: flex; justify-content: space-between; gap: 8px; text-align: left; color: #17332d; background: #f4f8f7; border: 1px solid transparent; }
 .annotation-image-list button.is-active { border-color: #0d927a; background: #e7f7f3; }
@@ -140,9 +143,10 @@
 .annotation-delete-button:hover { background: #fff0ef; }
 .annotation-stage { display: flex; flex-direction: column; min-width: 0; border-radius: 16px; overflow: hidden; background: #10231f; }
 .annotation-canvas { display: block; width: 100%; min-height: 440px; max-height: 70vh; touch-action: none; cursor: crosshair; background: #10231f; }
-.annotation-box { fill: rgba(255, 75, 75, .12); stroke: #ff4b4b; stroke-width: 3; vector-effect: non-scaling-stroke; }
+.annotation-box { stroke-width: 3; vector-effect: non-scaling-stroke; }
 .annotation-box--draft { stroke-dasharray: 8 5; }
-.annotation-box-label { fill: white; stroke: #10231f; stroke-width: 4; paint-order: stroke; font-size: 16px; }
+.annotation-box-label-bg { opacity: .94; }
+.annotation-box-label { fill: white; font-size: 15px; font-weight: 700; }
 .annotation-actions { display: flex; min-height: 4.2rem; align-items: center; justify-content: flex-end; gap: 10px; padding: 12px 14px; color: white; border-top: 1px solid rgb(255 255 255 / 10%); }
 .annotation-actions > span { margin-right: auto; overflow: hidden; text-overflow: ellipsis; }
 .annotation-empty { padding: 56px; text-align: center; border: 1px dashed #ccd9d5; border-radius: 16px; }
