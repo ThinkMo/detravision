@@ -18,11 +18,15 @@ it("maps a zoomed drag to normalized image coordinates", () => {
 });
 
 it("loads pending test images, draws a box and saves the annotation", async () => {
+  let savedBoxes: Array<{ class_id: number; x_center: number; y_center: number; width: number; height: number }> = [];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
     if (path.includes("/images?split=test")) return Response.json({ items: [{ id: 9, dataset_id: 2, split: "test", image_key: "new.jpg", display_name: "new.jpg", width: 1000, height: 500, review_status: "pending_annotation", validation_code: null, revision: 0 }], total: 1, page: 1, page_size: 50 });
-    if (path.endsWith("/images/9")) return Response.json({ id: 9, dataset_id: 2, split: "test", image_key: "new.jpg", display_name: "new.jpg", width: 1000, height: 500, review_status: "pending_annotation", validation_code: null, revision: 0, boxes: [] });
-    if (path.endsWith("/images/9/annotations") && init?.method === "PUT") return Response.json({ id: 9, dataset_id: 2, split: "test", image_key: "new.jpg", display_name: "new.jpg", width: 1000, height: 500, review_status: "annotated", validation_code: null, revision: 1, boxes: JSON.parse(String(init.body)).boxes });
+    if (path.endsWith("/images/9")) return Response.json({ id: 9, dataset_id: 2, split: "test", image_key: "new.jpg", display_name: "new.jpg", width: 1000, height: 500, review_status: savedBoxes.length ? "annotated" : "pending_annotation", validation_code: null, revision: savedBoxes.length ? 1 : 0, boxes: savedBoxes });
+    if (path.endsWith("/images/9/annotations") && init?.method === "PUT") {
+      savedBoxes = JSON.parse(String(init.body)).boxes;
+      return Response.json({ id: 9, dataset_id: 2, split: "test", image_key: "new.jpg", display_name: "new.jpg", width: 1000, height: 500, review_status: "annotated", validation_code: null, revision: 1 });
+    }
     throw new Error(`Unexpected ${path}`);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -47,4 +51,5 @@ it("loads pending test images, draws a box and saves the annotation", async () =
   await userEvent.click(screen.getByRole("button", { name: "保存标注" }));
   await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/training/datasets/2/images/9/annotations", expect.objectContaining({ method: "PUT" })));
   expect(screen.getByRole("status")).toHaveTextContent("标注已保存");
+  expect(screen.getByText("标注框（1）")).toBeVisible();
 });
