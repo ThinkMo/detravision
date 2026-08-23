@@ -275,11 +275,11 @@ $env:REAL_MODEL_TEST_IMAGE_DIR = (Resolve-Path "datasets/construction-ppe/images
 TRAINING_DATASET_ROOTS=construction=D:\datasets\construction;customer=D:\datasets\customer
 ```
 
-每个根目录必须是已存在的绝对目录，多个目录用分号分隔，且不能相互嵌套。重启服务后，在“模型管理 → 训练任务 → 管理训练集”中逐级浏览服务器目录，定义数据集名称、训练/验证/测试图片相对目录和类别。页面与 API 只返回别名和相对路径，不会暴露服务器绝对路径。
+每个根目录必须是已存在的绝对目录，多个目录用分号分隔，且不能相互嵌套。重启服务后，在“模型管理 → 训练集”中逐级浏览服务器目录，定义数据集名称、训练/验证/测试图片相对目录和类别。页面与 API 只返回别名和相对路径，不会暴露服务器绝对路径。
 
 每个分片必须同时存在对应标签目录，例如 `images/train` 对应 `labels/train`。新建训练时必须选择一个可用训练集；系统会把配置快照写入任务自己的 `dataset.yaml`，之后数据集被停用也不会改变已有任务的配置。基础模型下拉框只允许选择项目根目录或 `TRAINING_MODEL_CACHE_DIR` 中实际存在的 `.pt` 权重。
 
-从原始 Construction-PPE ZIP 构建三类训练集、执行冒烟训练、正式训练、续训和验证的完整步骤见 [训练集构建与模型训练指南](docs/training-guide.md)。
+从原始 Construction-PPE ZIP 构建三类训练集，以及通过管理控制台或 CLI 执行冒烟训练、正式训练、停止后续训、测试集评估、候选模型注册和启用的完整步骤见 [训练集构建与模型训练指南](docs/training-guide.md)。
 
 在管理控制台中复制已发布版本、扫描新增无标签图片、鼠标框选人工标注、校验并发布新训练/测评集的操作见 [训练集版本与人工标注指南](docs/dataset-annotation-guide.md)。
 
