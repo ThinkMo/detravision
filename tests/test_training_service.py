@@ -181,6 +181,56 @@ def test_create_rejects_reusing_idempotency_key_for_different_configuration(
     assert len(list(storage.root.iterdir())) == 1
 
 
+def test_create_persists_complete_advanced_and_acceptance_snapshots(service_context):
+    service, _repository, storage, _manager, _factory, admin_id, _settings = service_context
+
+    created = service.create(
+        created_by=admin_id,
+        request=request(
+            mode="advanced",
+            profile="high_recall",
+            advanced_config={"lr0": 0.002},
+            acceptance_config={
+                "overall": {"map50": 0.6},
+                "classes": {"no_helmet": {"recall": 0.8}},
+            },
+        ),
+        idempotency_key="advanced-create-1",
+    )
+
+    assert created["config_schema_version"] == 1
+    assert created["training_profile"] == "high_recall"
+    assert created["advanced_config"]["lr0"] == 0.002
+    assert created["acceptance_config"]["overall"]["map50"] == 0.6
+    manifest = json.loads(
+        (storage.run_path(created["run_key"]) / "manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["advanced_config"] == created["advanced_config"]
+    assert manifest["acceptance_config"] == created["acceptance_config"]
+
+
+def test_clone_template_returns_only_normalized_create_fields(service_context):
+    service, _repository, _storage, _manager, _factory, admin_id, _settings = service_context
+    source = service.create(
+        created_by=admin_id,
+        request=request(mode="advanced", profile="small_object"),
+        idempotency_key="clone-source-1",
+    )
+
+    cloned = service.clone_template(source["id"])
+
+    assert cloned["profile"] == "small_object"
+    assert cloned["advanced_config"] == source["advanced_config"]
+    assert cloned["acceptance_config"] == source["acceptance_config"]
+    assert set(cloned) == {
+        "dataset_key", "executor", "base_model", "imgsz", "epochs", "batch",
+        "device", "patience", "mode", "profile", "advanced_config",
+        "acceptance_config",
+    }
+
+
 @pytest.mark.parametrize(
     ("payload", "code"),
     [

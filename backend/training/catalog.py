@@ -8,6 +8,10 @@ from typing import Any
 import yaml
 
 from backend.core.config import Settings
+from training.configuration import (
+    catalog_schema,
+    resolve_training_config,
+)
 
 
 MAX_DATASET_YAML_BYTES = 1024 * 1024
@@ -33,6 +37,11 @@ class TrainingRequest:
     device: str
     patience: int
     executor: str = "local"
+    mode: str = "basic"
+    profile: str = "balanced"
+    advanced_config: Mapping[str, object] | None = None
+    acceptance_config: Mapping[str, object] | None = None
+    acceptance_template: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -56,6 +65,26 @@ class TrainingRequest:
             raise ValueError("unsupported device")
         if type(self.patience) is not int or not 0 <= self.patience <= 500:
             raise ValueError("patience must be between 0 and 500")
+        advanced = resolve_training_config(
+            mode=self.mode,
+            profile=self.profile,
+            overrides=self.advanced_config,
+            epochs=self.epochs,
+        )
+        if self.acceptance_config is not None and not isinstance(
+            self.acceptance_config, Mapping
+        ):
+            raise ValueError("acceptance config must be an object")
+        if self.acceptance_template not in {None, "generic", "safety_helmet"}:
+            raise ValueError("unsupported acceptance template")
+        object.__setattr__(self, "mode", "basic" if self.mode == "basic" else "advanced")
+        object.__setattr__(self, "profile", "balanced" if self.mode == "basic" else self.profile)
+        object.__setattr__(self, "advanced_config", advanced)
+        object.__setattr__(
+            self,
+            "acceptance_config",
+            dict(self.acceptance_config) if self.acceptance_config is not None else None,
+        )
 
 
 def _dataset_summary(settings: Settings) -> dict[str, Any]:
@@ -124,6 +153,7 @@ def training_catalog(settings: Settings, dataset_service=None) -> dict[str, Any]
     datasets = dataset_service.catalog() if dataset_service is not None else []
     available_datasets = [item for item in datasets if item.get("available")]
     return {
+        **catalog_schema(),
         "models": [
             {
                 "id": model_id,

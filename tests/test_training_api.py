@@ -55,6 +55,27 @@ class FakeTrainingService:
         self.get_job(job_id)
         return {"id": 9, "name": name or "candidate", "is_active": False, "source": "training"}
 
+    def clone_template(self, job_id: int):
+        self.get_job(job_id)
+        return {
+            "dataset_key": "dataset:3",
+            "executor": "local",
+            "base_model": "yolo11m.pt",
+            "imgsz": 640,
+            "epochs": 100,
+            "batch": "auto",
+            "device": "auto",
+            "patience": 50,
+            "mode": "advanced",
+            "profile": "high_recall",
+            "advanced_config": {"lr0": 0.002},
+            "acceptance_config": {
+                "schema_version": 1,
+                "overall": {"precision": None, "recall": None, "map50": 0.6, "map50_95": None},
+                "classes": {},
+            },
+        }
+
     def delete(self, job_id: int):
         self.get_job(job_id)
         self.deleted.append(job_id)
@@ -207,6 +228,44 @@ def test_training_mutations_use_idempotency_and_stable_errors(tmp_path: Path) ->
     assert any(row[0][1:4] == ("training_create", "training_job", 1) for row in audit.rows)
 
 
+def test_advanced_create_and_clone_template_use_public_normalized_contract(tmp_path: Path) -> None:
+    app, service, _audit = _app(tmp_path)
+    payload = {
+        "dataset_key": "dataset:3",
+        "executor": "local",
+        "base_model": "yolo11m.pt",
+        "imgsz": 640,
+        "epochs": 100,
+        "batch": "auto",
+        "device": "0",
+        "patience": 50,
+        "mode": "advanced",
+        "profile": "high_recall",
+        "advanced_config": {"lr0": 0.002},
+        "acceptance_config": {
+            "overall": {"map50": 0.6},
+            "classes": {},
+        },
+    }
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/training-jobs",
+            json=payload,
+            headers={"Idempotency-Key": "advanced_123"},
+        )
+        cloned = client.get("/api/training-jobs/1/clone-template")
+
+    assert created.status_code == 201
+    request = service.created[0]["request"]
+    assert request.profile == "high_recall"
+    assert request.advanced_config["lr0"] == 0.002
+    assert cloned.status_code == 200
+    assert cloned.json()["profile"] == "high_recall"
+    for forbidden in ("run_key", "pid", "idempotency_key", "best_sha256"):
+        assert forbidden not in cloned.text
+
+
 def test_training_validation_uses_stable_error_shape(tmp_path: Path) -> None:
     app, _, _ = _app(tmp_path)
     with TestClient(app) as client:
@@ -222,6 +281,38 @@ def test_training_validation_uses_stable_error_shape(tmp_path: Path) -> None:
     assert response.json() == {
         "code": "invalid_training_request",
         "message": "The training request is invalid.",
+    }
+
+
+def test_advanced_validation_returns_safe_field_errors(tmp_path: Path) -> None:
+    app, _, _ = _app(tmp_path)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/training-jobs",
+            json={
+                "dataset_key": "dataset:3",
+                "executor": "local",
+                "base_model": "yolo11m.pt",
+                "imgsz": 640,
+                "epochs": 100,
+                "batch": "auto",
+                "device": "auto",
+                "patience": 50,
+                "mode": "advanced",
+                "profile": "custom",
+                "advanced_config": {"lr0": True, "arbitrary_path": "secret"},
+            },
+            headers={"Idempotency-Key": "invalid-advanced-1"},
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "code": "training_config_invalid",
+        "message": "The training configuration is invalid.",
+        "field_errors": {
+            "arbitrary_path": ["unknown_field"],
+            "lr0": ["invalid_type"],
+        },
     }
 
 

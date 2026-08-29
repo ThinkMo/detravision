@@ -10,6 +10,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from training.configuration import (
+    CONFIG_SCHEMA_VERSION,
+    TrainingConfigError,
+    normalize_acceptance_config,
+    resolve_training_config,
+)
+
 
 _MODEL_ID = re.compile(r"yolo(?:11|26)[nsmlx]\.pt\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -25,6 +32,9 @@ _MANIFEST_KEYS = frozenset(
         "device",
         "patience",
     }
+)
+_MANIFEST_ADVANCED_KEYS = frozenset(
+    {"config_schema_version", "dataset_classes", "advanced_config", "acceptance_config"}
 )
 _MANIFEST_OPTIONAL_KEYS = frozenset({"resume_checkpoint"})
 _PROGRESS_KEYS = frozenset({"current_epoch", "total_epochs", "metrics"})
@@ -118,16 +128,25 @@ class TrainingManifest:
     batch: str
     device: str
     patience: int
+    config_schema_version: int
+    dataset_classes: tuple[str, ...]
+    advanced_config: dict[str, object]
+    acceptance_config: dict[str, object]
     resume_checkpoint: str | None = None
 
     @classmethod
     def from_json(cls, payload: object) -> "TrainingManifest":
         values = _mapping(payload, "training manifest")
-        if set(values) not in (
+        manifest_keys = set(values)
+        allowed = {
             _MANIFEST_KEYS,
             _MANIFEST_KEYS | _MANIFEST_OPTIONAL_KEYS,
-        ):
+            _MANIFEST_KEYS | _MANIFEST_ADVANCED_KEYS,
+            _MANIFEST_KEYS | _MANIFEST_ADVANCED_KEYS | _MANIFEST_OPTIONAL_KEYS,
+        }
+        if frozenset(manifest_keys) not in allowed:
             raise ValueError("training manifest has unsupported or missing fields")
+        has_advanced_snapshot = _MANIFEST_ADVANCED_KEYS <= manifest_keys
         base_model = _string(values, "base_model")
         if _MODEL_ID.fullmatch(base_model) is None:
             raise ValueError("unsupported base model")
@@ -146,6 +165,43 @@ class TrainingManifest:
             raise ValueError("unsupported device")
         if not 0 <= patience <= 500:
             raise ValueError("patience out of range")
+        if has_advanced_snapshot:
+            config_schema_version = _integer(values, "config_schema_version")
+            if config_schema_version != CONFIG_SCHEMA_VERSION:
+                raise ValueError("unsupported training config schema")
+            raw_classes = values.get("dataset_classes")
+            if (
+                not isinstance(raw_classes, list)
+                or not raw_classes
+                or not all(isinstance(name, str) and name for name in raw_classes)
+                or len(set(raw_classes)) != len(raw_classes)
+            ):
+                raise ValueError("dataset_classes must be a non-empty unique string list")
+            raw_advanced = _mapping(values.get("advanced_config"), "advanced_config")
+            try:
+                advanced_config = resolve_training_config(
+                    mode="advanced",
+                    profile="custom",
+                    overrides=raw_advanced,
+                    epochs=epochs,
+                )
+                if set(raw_advanced) != set(advanced_config):
+                    raise ValueError("advanced_config must be a complete snapshot")
+                acceptance_config = normalize_acceptance_config(
+                    _mapping(values.get("acceptance_config"), "acceptance_config"),
+                    classes=raw_classes,
+                )
+            except TrainingConfigError as exc:
+                raise ValueError(exc.code) from exc
+        else:
+            config_schema_version = CONFIG_SCHEMA_VERSION
+            raw_classes = ["person", "helmet", "no_helmet"]
+            advanced_config = resolve_training_config(
+                mode="basic", profile="balanced", overrides=None, epochs=epochs
+            )
+            acceptance_config = normalize_acceptance_config(
+                None, classes=raw_classes, template="safety_helmet"
+            )
         run_dir = _absolute_path(values, "run_dir")
         resume_checkpoint = values.get("resume_checkpoint")
         if resume_checkpoint is not None:
@@ -172,11 +228,16 @@ class TrainingManifest:
             batch=batch,
             device=device,
             patience=patience,
+            config_schema_version=config_schema_version,
+            dataset_classes=tuple(raw_classes),
+            advanced_config=advanced_config,
+            acceptance_config=acceptance_config,
             resume_checkpoint=resume_checkpoint,
         )
 
     def to_json(self) -> dict[str, object]:
         payload = asdict(self)
+        payload["dataset_classes"] = list(self.dataset_classes)
         if payload["resume_checkpoint"] is None:
             del payload["resume_checkpoint"]
         return payload

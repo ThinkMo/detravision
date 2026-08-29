@@ -13,6 +13,11 @@ from backend.core.config import Settings
 from backend.core.public_records import public_model
 from backend.db.repositories import Repository
 from training.contracts import TrainingManifest, atomic_write_json
+from training.configuration import (
+    CONFIG_SCHEMA_VERSION,
+    TrainingConfigError,
+    normalize_acceptance_config,
+)
 
 from .catalog import TrainingRequest
 from .dataset_service import DatasetService, DatasetServiceError
@@ -28,11 +33,12 @@ class TrainingManager(Protocol):
     def owns_job(self, job_id: int) -> bool: ...
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class TrainingServiceError(Exception):
     status_code: int
     code: str
     message: str
+    field_errors: dict[str, list[str]] | None = None
 
 
 class TrainingService:
@@ -64,12 +70,19 @@ class TrainingService:
         normalized = self._request(request)
         key = self._idempotency_key(idempotency_key)
         dataset = self._require_dataset(normalized.dataset_key)
+        acceptance_config = self._acceptance(normalized, dataset["classes"])
         self._require_weights(normalized.base_model)
         run_key = self._storage.create_run()
         run_dir = self._storage.run_path(run_key)
         try:
             dataset_yaml = self._storage.write_dataset_snapshot(run_key, dataset)
-            manifest = self._manifest(normalized, run_dir, dataset_yaml=dataset_yaml)
+            manifest = self._manifest(
+                normalized,
+                run_dir,
+                dataset_yaml=dataset_yaml,
+                dataset_classes=dataset["classes"],
+                acceptance_config=acceptance_config,
+            )
             atomic_write_json(run_dir / "manifest.json", manifest.to_json())
             job = self._repository.create_job(
                 {
@@ -84,6 +97,10 @@ class TrainingService:
                     "batch": normalized.batch,
                     "device": normalized.device,
                     "patience": normalized.patience,
+                    "config_schema_version": CONFIG_SCHEMA_VERSION,
+                    "training_profile": normalized.profile,
+                    "advanced_config": normalized.advanced_config,
+                    "acceptance_config": acceptance_config,
                     "run_key": run_key,
                     "idempotency_key": key,
                 }
@@ -109,6 +126,10 @@ class TrainingService:
                 "batch": normalized.batch,
                 "device": normalized.device,
                 "patience": normalized.patience,
+                "config_schema_version": CONFIG_SCHEMA_VERSION,
+                "training_profile": normalized.profile,
+                "advanced_config": normalized.advanced_config,
+                "acceptance_config": acceptance_config,
             }
             if any(job.get(field) != value for field, value in expected.items()):
                 raise TrainingServiceError(
@@ -131,6 +152,29 @@ class TrainingService:
         if job is None:
             raise self._not_found()
         return job
+
+    def clone_template(self, job_id: int) -> dict[str, Any]:
+        source = self.get_job(job_id)
+        if source["training_profile"] == "legacy":
+            raise TrainingServiceError(
+                409,
+                "training_schema_unsupported",
+                "Legacy training jobs cannot be cloned.",
+            )
+        return {
+            "dataset_key": source["dataset_key"],
+            "executor": source["executor"],
+            "base_model": source["base_model"],
+            "imgsz": source["imgsz"],
+            "epochs": source["epochs"],
+            "batch": source["batch"],
+            "device": source["device"],
+            "patience": source["patience"],
+            "mode": "advanced",
+            "profile": source["training_profile"],
+            "advanced_config": source["advanced_config"],
+            "acceptance_config": source["acceptance_config"],
+        }
 
     def request_stop(self, job_id: int) -> dict[str, Any]:
         if self._repository.get_job(job_id) is None:
@@ -213,6 +257,14 @@ class TrainingService:
                 batch=str(source["batch"]),
                 device=str(source["device"]),
                 patience=int(source["patience"]),
+                mode="advanced",
+                profile=(
+                    str(source["training_profile"])
+                    if source["training_profile"] != "legacy"
+                    else "custom"
+                ),
+                advanced_config=source["advanced_config"],
+                acceptance_config=source["acceptance_config"],
             )
             try:
                 source_run = self._storage.run_path(str(source["run_key"]))
@@ -230,6 +282,8 @@ class TrainingService:
                 normalized,
                 run_dir,
                 dataset_yaml=dataset_yaml.resolve(),
+                dataset_classes=source["dataset_classes"],
+                acceptance_config=source["acceptance_config"],
                 resume_checkpoint=resume_checkpoint.resolve(),
             )
             atomic_write_json(run_dir / "manifest.json", manifest.to_json())
@@ -262,6 +316,10 @@ class TrainingService:
                 "device": source["device"],
                 "patience": source["patience"],
                 "resume_from_id": source["id"],
+                "config_schema_version": source["config_schema_version"],
+                "training_profile": source["training_profile"],
+                "advanced_config": source["advanced_config"],
+                "acceptance_config": source["acceptance_config"],
             }
             if any(
                 resumed.get(field) != value for field, value in expected.items()
@@ -355,6 +413,8 @@ class TrainingService:
         run_dir: Path,
         *,
         dataset_yaml: Path,
+        dataset_classes: list[str],
+        acceptance_config: Mapping[str, object],
         resume_checkpoint: Path | None = None,
     ) -> TrainingManifest:
         return TrainingManifest.from_json(
@@ -368,6 +428,10 @@ class TrainingService:
                 "batch": request.batch,
                 "device": request.device,
                 "patience": request.patience,
+                "config_schema_version": CONFIG_SCHEMA_VERSION,
+                "dataset_classes": list(dataset_classes),
+                "advanced_config": dict(request.advanced_config or {}),
+                "acceptance_config": dict(acceptance_config),
                 **(
                     {"resume_checkpoint": str(resume_checkpoint)}
                     if resume_checkpoint is not None
@@ -376,6 +440,24 @@ class TrainingService:
             }
         )
 
+    @staticmethod
+    def _acceptance(
+        request: TrainingRequest, classes: list[str]
+    ) -> dict[str, object]:
+        try:
+            return normalize_acceptance_config(
+                request.acceptance_config,
+                classes=classes,
+                template=request.acceptance_template,
+            )
+        except TrainingConfigError as exc:
+            raise TrainingServiceError(
+                422,
+                exc.code,
+                "The training acceptance configuration is invalid.",
+                exc.field_errors,
+            ) from exc
+
     def _request(
         self, request: TrainingRequest | Mapping[str, object]
     ) -> TrainingRequest:
@@ -383,6 +465,13 @@ class TrainingService:
             return request
         try:
             return TrainingRequest(**dict(request))
+        except TrainingConfigError as exc:
+            raise TrainingServiceError(
+                422,
+                exc.code,
+                "The training configuration is invalid.",
+                exc.field_errors,
+            ) from exc
         except (TypeError, ValueError) as exc:
             executor = request.get("executor") if isinstance(request, Mapping) else None
             code = (

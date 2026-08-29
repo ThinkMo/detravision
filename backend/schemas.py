@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -151,6 +151,11 @@ class TrainingJobCreate(BaseModel):
     batch: Literal["1", "2", "4", "8", "auto"] = "auto"
     device: Literal["auto", "cpu", "0"] = "auto"
     patience: int = Field(default=50, ge=0, le=500)
+    mode: Literal["basic", "advanced"] = "basic"
+    profile: str = Field(default="balanced", min_length=1, max_length=30)
+    advanced_config: dict[str, Any] | None = None
+    acceptance_config: dict[str, Any] | None = None
+    acceptance_template: Literal["generic", "safety_helmet"] | None = None
 
 
 class TrainingModelRegister(BaseModel):

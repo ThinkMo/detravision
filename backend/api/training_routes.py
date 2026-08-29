@@ -28,6 +28,7 @@ from backend.training.catalog import TrainingRequest, training_catalog
 from backend.training.dataset_service import DatasetService, DatasetServiceError
 from backend.training.service import TrainingService, TrainingServiceError
 from backend.training.storage import TrainingStorage
+from training.configuration import TrainingConfigError
 
 
 class StableTrainingRoute(APIRoute):
@@ -60,13 +61,15 @@ router = APIRouter(
 
 _SAFE_JOB_FIELDS = (
     "id", "created_by", "executor", "base_model", "dataset_key",
-    "dataset_classes", "epochs", "imgsz", "batch", "device", "patience",
+    "dataset_classes", "dataset_manifest_digest", "epochs", "imgsz", "batch", "device", "patience",
+    "config_schema_version", "training_profile",
     "status", "current_epoch", "total_epochs", "started_at", "finished_at",
     "stop_requested", "has_best", "has_last", "has_metrics", "precision",
     "recall", "map50", "map50_95", "no_helmet_precision",
     "no_helmet_recall", "accepted", "metrics", "error_code", "error_message",
     "resume_from_id", "created_at", "updated_at",
 )
+_DETAIL_JOB_FIELDS = ("advanced_config", "acceptance_config", "acceptance_checks")
 _PUBLIC_ARTIFACTS = frozenset({"log", "confusion_matrix"})
 
 
@@ -91,9 +94,12 @@ def _validator(request: Request) -> DatasetValidator:
 
 
 def _error(error: TrainingServiceError) -> JSONResponse:
+    content: dict[str, Any] = {"code": error.code, "message": error.message}
+    if error.field_errors:
+        content["field_errors"] = error.field_errors
     return JSONResponse(
         status_code=error.status_code,
-        content={"code": error.code, "message": error.message},
+        content=content,
     )
 
 
@@ -106,6 +112,7 @@ def _public_job(job: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
         else 0.0
     )
     if detail:
+        result.update({key: job.get(key) for key in _DETAIL_JOB_FIELDS})
         base = f"/api/training-jobs/{job_id}/artifacts"
         result["log_url"] = f"{base}/log"
         result["confusion_matrix_url"] = (
@@ -142,6 +149,13 @@ def _request(payload: TrainingJobCreate) -> TrainingRequest:
         )
     try:
         return TrainingRequest(**payload.model_dump())
+    except TrainingConfigError as exc:
+        raise TrainingServiceError(
+            422,
+            exc.code,
+            "The training configuration is invalid.",
+            exc.field_errors,
+        ) from exc
     except (TypeError, ValueError) as exc:
         raise TrainingServiceError(
             422, "invalid_training_request", "The training request is invalid."
@@ -477,6 +491,18 @@ def get_training_job(
 ):
     try:
         return _public_job(_service(request).get_job(job_id), detail=True)
+    except TrainingServiceError as exc:
+        return _error(exc)
+
+
+@router.get("/training-jobs/{job_id}/clone-template")
+def get_training_job_clone_template(
+    job_id: int,
+    request: Request,
+    _user: AuthenticatedUser = Depends(audited_admin("read", "training_job")),
+):
+    try:
+        return _service(request).clone_template(job_id)
     except TrainingServiceError as exc:
         return _error(exc)
 

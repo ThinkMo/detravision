@@ -57,6 +57,36 @@ def test_catalog_exposes_only_fixed_models_and_disabled_remote(tmp_path: Path):
     ]
 
 
+def test_catalog_exposes_versioned_advanced_training_contract(tmp_path: Path):
+    catalog = training_catalog(make_settings(tmp_path))
+
+    assert catalog["config_schema_version"] == 1
+    assert catalog["profile_version"] == 1
+    assert [profile["id"] for profile in catalog["training_profiles"]] == [
+        "balanced",
+        "small_object",
+        "high_recall",
+        "stable_finetune",
+        "custom",
+    ]
+    assert catalog["advanced_config_schema"]["fields"]["lr0"] == {
+        "type": "number",
+        "label": "初始学习率",
+        "help": "训练开始时的学习率。",
+        "default": 0.01,
+        "min": 0.000001,
+        "max": 0.1,
+    }
+    templates = {
+        item["id"]: item for item in catalog["acceptance_schema"]["templates"]
+    }
+    assert templates["safety_helmet"]["required_classes"] == [
+        "person",
+        "helmet",
+        "no_helmet",
+    ]
+
+
 def test_catalog_reports_local_weight_availability(tmp_path: Path):
     settings = make_settings(tmp_path)
     settings.training_model_cache_dir.mkdir()
