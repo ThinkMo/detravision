@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from backend.core.config import Settings
 from backend.db.migrate import run_migrations
-from backend.db.models import ModelVersion, TrainingJob, User
+from backend.db.models import ModelVersion, TrainingDataset, TrainingJob, User
 from backend.db.repositories import Repository
 from backend.db.session import create_engine_from_url, create_session_factory
 from backend.training.catalog import TrainingRequest
@@ -69,7 +69,7 @@ def service_context(tmp_path: Path):
     repository = TrainingRepository(session_factory)
     dataset_repository = TrainingDatasetRepository(session_factory)
     dataset_service = DatasetService(settings, dataset_repository)
-    dataset_service.create(
+    created_dataset = dataset_service.create(
         {
             "name": "Site A",
             "root_alias": "primary",
@@ -81,13 +81,23 @@ def service_context(tmp_path: Path):
         },
         created_by=admin_id,
     )
+    with session_factory.begin() as session:
+        stored_dataset = session.get(TrainingDataset, created_dataset["id"])
+        assert stored_dataset is not None
+        stored_dataset.manifest_digest = "d" * 64
     model_repository = Repository(session_factory)
     storage = TrainingStorage(settings)
     storage.model_cache_root.mkdir(parents=True)
     (storage.model_cache_root / "yolo11m.pt").write_bytes(b"local-weights")
     manager = ManagerSpy()
     service = TrainingService(
-        repository, storage, model_repository, manager, settings, dataset_service
+        repository,
+        storage,
+        model_repository,
+        manager,
+        settings,
+        dataset_service,
+        checkpoint_class_reader=lambda _path: ["person", "helmet", "no_helmet"],
     )
     try:
         yield (
@@ -434,19 +444,29 @@ def test_failed_evaluation_at_total_epochs_is_not_offered_as_resumable(
     assert captured.value.code == "evaluation_retry_required"
 
 
-def completed_job(repository, storage, admin_id: int):
+def completed_job(
+    repository,
+    storage,
+    admin_id: int,
+    *,
+    classes=None,
+    profile: str = "high_recall",
+):
+    classes = classes or ["person", "helmet", "no_helmet"]
     created = repository.create_job(
         {
             "created_by": admin_id,
             "executor": "local",
             "base_model": "yolo11l.pt",
             "dataset_key": "configured",
-            "dataset_classes": ["person", "helmet", "no_helmet"],
+            "dataset_classes": classes,
+            "training_dataset_id": 1,
             "epochs": 10,
             "imgsz": 640,
             "batch": "4",
             "device": "0",
             "patience": 3,
+            "training_profile": profile,
             "run_key": storage.create_run(),
             "idempotency_key": "completed-source-1",
         }
@@ -456,13 +476,14 @@ def completed_job(repository, storage, admin_id: int):
     best.parent.mkdir(parents=True)
     best.write_bytes(b"trained best checkpoint")
     digest = hashlib.sha256(best.read_bytes()).hexdigest()
+    focus_class = "no_helmet" if "no_helmet" in classes else classes[-1]
     metrics = {
         "precision": 0.89,
         "recall": 0.93,
         "map50": 0.90,
         "map50_95": 0.67,
         "classes": {
-            "no_helmet": {
+            focus_class: {
                 "precision": 0.87,
                 "recall": 0.92,
                 "map50": 0.9,
@@ -504,6 +525,49 @@ def test_register_model_requires_unchanged_completed_best_and_keeps_candidate_in
         assert row.base_model == "yolo11l.pt"
         assert row.imgsz == 640
     assert json.loads(row.metrics_json)["classes"]["no_helmet"]["recall"] == 0.92
+
+
+def test_register_model_rejects_checkpoint_class_order_mismatch(service_context):
+    """Catches a trusted checkpoint being registered under a false class snapshot."""
+    service, repository, storage, _manager, factory, admin_id, _settings = service_context
+    job, best = completed_job(repository, storage, admin_id)
+    observed: list[Path] = []
+
+    def read_classes(path: Path):
+        observed.append(path)
+        return ["helmet", "person", "no_helmet"]
+
+    service._checkpoint_class_reader = read_classes  # type: ignore[attr-defined]
+
+    with pytest.raises(TrainingServiceError) as captured:
+        service.register_model(job["id"])
+
+    assert captured.value.code == "model_classes_mismatch"
+    assert observed == [best.resolve()]
+    with factory() as session:
+        assert session.scalar(select(ModelVersion.id)) is None
+
+
+def test_register_model_supports_arbitrary_classes_and_exposes_provenance(
+    service_context,
+):
+    """Catches generic models losing class order or reproducibility provenance."""
+    service, repository, storage, _manager, _factory, admin_id, _settings = service_context
+    classes = ["fire", "smoke"]
+    job, _best = completed_job(
+        repository, storage, admin_id, classes=classes, profile="high_recall"
+    )
+    service._checkpoint_class_reader = lambda _path: classes  # type: ignore[attr-defined]
+
+    registered = service.register_model(job["id"], name="fire-v1")
+
+    assert registered["classes"] == classes
+    assert registered["training_profile"] == "high_recall"
+    assert registered["training_config"]["advanced_config"] == job["advanced_config"]
+    assert registered["dataset_manifest_digest"] is not None
+    assert registered["dataset_manifest_digest"] == job["dataset_manifest_digest"]
+    assert registered["metrics"]["classes"]["smoke"]["recall"] == 0.92
+    assert registered["accepted"] is True
 
 
 def test_delete_removes_terminal_unregistered_training_job(service_context):

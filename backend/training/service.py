@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -33,6 +33,25 @@ class TrainingManager(Protocol):
     def owns_job(self, job_id: int) -> bool: ...
 
 
+def _checkpoint_classes(path: Path) -> list[str]:
+    """Read class metadata from a service-owned Ultralytics checkpoint."""
+    from ultralytics import YOLO
+
+    names = getattr(YOLO(str(path)), "names", None)
+    if isinstance(names, Mapping):
+        indexed = sorted((int(key), value) for key, value in names.items())
+        if [index for index, _value in indexed] != list(range(len(indexed))):
+            raise ValueError("checkpoint class indexes are not contiguous")
+        values = [value for _index, value in indexed]
+    elif isinstance(names, Sequence) and not isinstance(names, (str, bytes)):
+        values = list(names)
+    else:
+        raise ValueError("checkpoint class metadata is unavailable")
+    if not values or not all(isinstance(value, str) and value for value in values):
+        raise ValueError("checkpoint class metadata is invalid")
+    return values
+
+
 @dataclass(slots=True)
 class TrainingServiceError(Exception):
     status_code: int
@@ -52,6 +71,8 @@ class TrainingService:
         manager: TrainingManager,
         settings: Settings,
         dataset_service: DatasetService,
+        *,
+        checkpoint_class_reader: Callable[[Path], list[str]] = _checkpoint_classes,
     ) -> None:
         self._repository = repository
         self._storage = storage
@@ -59,6 +80,7 @@ class TrainingService:
         self._manager = manager
         self._settings = settings
         self._dataset_service = dataset_service
+        self._checkpoint_class_reader = checkpoint_class_reader
 
     def create(
         self,
@@ -374,15 +396,45 @@ class TrainingService:
                 "training_model_unavailable",
                 "The training dataset class snapshot is unavailable.",
             )
+        try:
+            checkpoint_classes = self._checkpoint_class_reader(best.resolve())
+        except Exception as exc:
+            raise TrainingServiceError(
+                409,
+                "model_classes_mismatch",
+                "The model classes do not match the training dataset snapshot.",
+            ) from exc
+        if checkpoint_classes != classes:
+            raise TrainingServiceError(
+                409,
+                "model_classes_mismatch",
+                "The model classes do not match the training dataset snapshot.",
+            )
+        training_config = {
+            "schema_version": job["config_schema_version"],
+            "profile": job["training_profile"],
+            "advanced_config": job["advanced_config"],
+            "acceptance_config": job["acceptance_config"],
+        }
+        stored_metrics = {
+            **metrics,
+            "_provenance": {
+                "training_profile": job["training_profile"],
+                "training_config": training_config,
+                "dataset_manifest_digest": job.get("dataset_manifest_digest"),
+                "accepted": job.get("accepted"),
+            },
+        }
         provenance = {
             "training_job_id": job_id,
             "source": "training",
             "base_model": job["base_model"],
             "imgsz": job["imgsz"],
             "metrics_json": json.dumps(
-                metrics,
+                stored_metrics,
                 ensure_ascii=False,
                 separators=(",", ":"),
+                sort_keys=True,
                 allow_nan=False,
             ),
             "deployment_runtime": None,

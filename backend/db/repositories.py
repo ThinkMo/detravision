@@ -65,6 +65,20 @@ def event_dict(row: DetectionEvent) -> dict[str, Any]:
 
 
 def model_dict(row: ModelVersion) -> dict[str, Any]:
+    metrics: dict[str, Any] | None = None
+    provenance: dict[str, Any] = {}
+    if row.metrics_json is not None:
+        try:
+            decoded = json.loads(row.metrics_json)
+        except (TypeError, ValueError):
+            decoded = None
+        if isinstance(decoded, dict):
+            raw_provenance = decoded.get("_provenance")
+            if isinstance(raw_provenance, dict):
+                provenance = raw_provenance
+            metrics = {
+                key: value for key, value in decoded.items() if key != "_provenance"
+            }
     return {
         "id": row.id,
         "name": row.name,
@@ -77,6 +91,11 @@ def model_dict(row: ModelVersion) -> dict[str, Any]:
         "base_model": row.base_model,
         "imgsz": row.imgsz,
         "metrics_json": row.metrics_json,
+        "metrics": metrics,
+        "training_profile": provenance.get("training_profile"),
+        "training_config": provenance.get("training_config"),
+        "dataset_manifest_digest": provenance.get("dataset_manifest_digest"),
+        "accepted": provenance.get("accepted"),
         "deployment_runtime": row.deployment_runtime,
         "is_active": row.is_active,
         "created_at": utc_iso(row.created_at),

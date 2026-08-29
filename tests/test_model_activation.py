@@ -102,6 +102,30 @@ def test_activation_loads_and_warms_before_persisting_then_swaps_provider(
     assert result.detections[0].label == "new"
 
 
+def test_activation_supports_an_arbitrary_category_model(activation_repository):
+    """Catches activation retaining a helmet-only category restriction."""
+    repository, old, candidate = activation_repository
+    provider = DetectorProvider(LabelDetector("old"), old["id"])
+    arbitrary = repository.create_model(
+        {
+            "name": "fire-smoke",
+            "file_path": candidate["file_path"],
+            "classes": ["fire", "smoke"],
+        }
+    )
+    service = ModelActivationService(
+        repository,
+        provider,
+        detector_builder=lambda _path: LabelDetector("smoke"),
+        warmup_image_factory=object,
+    )
+
+    activated = service.activate(arbitrary["id"])
+
+    assert activated["classes"] == ["fire", "smoke"]
+    assert provider.predict_batch(object()).detections[0].label == "smoke"
+
+
 @pytest.mark.parametrize(
     ("failure", "expected"),
     [("load", ModelLoadFailed), ("warmup", ModelWarmupFailed), ("persist", ModelActivationConflict)],
