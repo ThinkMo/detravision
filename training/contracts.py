@@ -13,6 +13,7 @@ from typing import Any
 from training.configuration import (
     CONFIG_SCHEMA_VERSION,
     TrainingConfigError,
+    evaluate_acceptance,
     normalize_acceptance_config,
     resolve_training_config,
 )
@@ -46,8 +47,10 @@ _RESULT_KEYS = frozenset(
         "best_sha256",
         "error_code",
         "error_message",
+        "acceptance_checks",
     }
 )
+_LEGACY_RESULT_KEYS = _RESULT_KEYS - {"acceptance_checks"}
 _METRIC_KEYS = frozenset({"precision", "recall", "map50", "map50_95", "classes"})
 _CLASS_METRIC_KEYS = frozenset({"precision", "recall", "map50", "map50_95"})
 
@@ -133,6 +136,7 @@ class TrainingManifest:
     advanced_config: dict[str, object]
     acceptance_config: dict[str, object]
     resume_checkpoint: str | None = None
+    _legacy: bool = False
 
     @classmethod
     def from_json(cls, payload: object) -> "TrainingManifest":
@@ -233,11 +237,16 @@ class TrainingManifest:
             advanced_config=advanced_config,
             acceptance_config=acceptance_config,
             resume_checkpoint=resume_checkpoint,
+            _legacy=not has_advanced_snapshot,
         )
 
     def to_json(self) -> dict[str, object]:
         payload = asdict(self)
+        legacy = bool(payload.pop("_legacy"))
         payload["dataset_classes"] = list(self.dataset_classes)
+        if legacy:
+            for key in _MANIFEST_ADVANCED_KEYS:
+                payload.pop(key)
         if payload["resume_checkpoint"] is None:
             del payload["resume_checkpoint"]
         return payload
@@ -273,14 +282,21 @@ class TrainingResult:
     status: str
     metrics: dict[str, Any] | None
     accepted: bool
+    acceptance_checks: list[dict[str, object]]
     best_sha256: str | None
     error_code: str | None
     error_message: str | None
 
     @classmethod
-    def from_json(cls, payload: object) -> "TrainingResult":
+    def from_json(
+        cls,
+        payload: object,
+        *,
+        acceptance_config: Mapping[str, object] | None = None,
+    ) -> "TrainingResult":
         values = _mapping(payload, "training result")
-        _exact_keys(values, _RESULT_KEYS, "training result")
+        if frozenset(values) not in {_RESULT_KEYS, _LEGACY_RESULT_KEYS}:
+            raise ValueError("training result has unsupported or missing fields")
         status = _string(values, "status")
         if status not in {"completed", "failed"}:
             raise ValueError("unsupported training result status")
@@ -316,8 +332,23 @@ class TrainingResult:
             or not error_message
         ):
             raise ValueError("invalid failed result")
-        if status == "completed" and accepted is not meets_acceptance(metrics):
-            raise ValueError("acceptance does not match metrics")
+        acceptance_checks: list[dict[str, object]] = []
+        if status == "completed":
+            assert metrics is not None
+            expected_accepted, expected_checks = _evaluate_result_acceptance(
+                metrics, acceptance_config
+            )
+            if accepted is not expected_accepted:
+                raise ValueError("acceptance does not match metrics")
+            raw_checks = values.get("acceptance_checks")
+            if raw_checks is not None:
+                if raw_checks != expected_checks:
+                    raise ValueError("acceptance checks do not match metrics")
+                acceptance_checks = expected_checks
+            else:
+                acceptance_checks = expected_checks
+        elif values.get("acceptance_checks") not in (None, []):
+            raise ValueError("failed result cannot contain acceptance checks")
         if status == "failed" and (
             error_code not in ERROR_MESSAGES
             or error_message != ERROR_MESSAGES.get(error_code)
@@ -330,6 +361,7 @@ class TrainingResult:
             status=status,
             metrics=metrics,
             accepted=accepted,
+            acceptance_checks=acceptance_checks,
             best_sha256=best_sha256,
             error_code=error_code,
             error_message=error_message,
@@ -461,18 +493,41 @@ def extract_metrics(metrics: object) -> dict[str, Any]:
     return {**overall, "classes": classes}
 
 
-def meets_acceptance(metrics: Mapping[str, Any]) -> bool:
+def _legacy_acceptance_config() -> dict[str, object]:
+    return {
+        "schema_version": CONFIG_SCHEMA_VERSION,
+        "overall": {
+            "precision": None,
+            "recall": None,
+            "map50": 0.85,
+            "map50_95": None,
+        },
+        "classes": {
+            "no_helmet": {
+                "precision": 0.85,
+                "recall": 0.9,
+                "map50": None,
+                "map50_95": None,
+            }
+        },
+    }
+
+
+def _evaluate_result_acceptance(
+    metrics: Mapping[str, Any],
+    config: Mapping[str, object] | None,
+) -> tuple[bool, list[dict[str, object]]]:
     try:
-        no_helmet = metrics["classes"]["no_helmet"]
-        map50 = metrics["map50"]
-        precision = no_helmet["precision"]
-        recall = no_helmet["recall"]
-        if precision is None or recall is None:
-            return False
-        return (
-            _probability(map50, "map50") >= 0.85
-            and _probability(precision, "no_helmet precision") >= 0.85
-            and _probability(recall, "no_helmet recall") >= 0.90
-        )
+        return evaluate_acceptance(metrics, config or _legacy_acceptance_config())
+    except (KeyError, TypeError, ValueError):
+        return False, []
+
+
+def meets_acceptance(
+    metrics: Mapping[str, Any], config: Mapping[str, object] | None = None
+) -> bool:
+    """Evaluate generic rules, retaining the historical helmet policy by default."""
+    try:
+        return evaluate_acceptance(metrics, config or _legacy_acceptance_config())[0]
     except (KeyError, TypeError, ValueError):
         return False

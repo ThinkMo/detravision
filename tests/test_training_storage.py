@@ -46,9 +46,14 @@ def test_artifact_resolution_uses_only_the_fixed_allowlist(tmp_path: Path):
         "best": "weights/best.pt",
         "last": "weights/last.pt",
         "confusion_matrix": "confusion_matrix.png",
+        "results_curve": "results.png",
+        "effective_config": "effective_config.json",
     }
     assert storage.resolve_artifact(run_key, "best") == (
         storage.root / run_key / "weights" / "best.pt"
+    ).resolve()
+    assert storage.resolve_artifact(run_key, "results_curve") == (
+        storage.root / run_key / "results.png"
     ).resolve()
     with pytest.raises(ValueError):
         storage.resolve_artifact(run_key, "../../outside")

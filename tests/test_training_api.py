@@ -169,6 +169,7 @@ def _app(tmp_path: Path, *, role: str = "admin") -> tuple[FastAPI, FakeTrainingS
         f"epoch 1 {tmp_path / 'private'}", encoding="utf-8"
     )
     storage.resolve_artifact(run_key, "confusion_matrix").write_bytes(b"png")
+    storage.resolve_artifact(run_key, "results_curve").write_bytes(b"curve")
     service = FakeTrainingService(_job(run_key))
     audit = FakeAudit()
     app = FastAPI()
@@ -199,6 +200,7 @@ def test_training_catalog_and_job_dtos_hide_server_fields(tmp_path: Path) -> Non
     for forbidden in ("run_key", "pid", "idempotency_key", "best_sha256", str(tmp_path)):
         assert forbidden not in serialized
     assert detail.json()["confusion_matrix_url"].endswith("/artifacts/confusion_matrix")
+    assert detail.json()["results_curve_url"].endswith("/artifacts/results_curve")
     assert detail.json()["log_url"].endswith("/artifacts/log")
 
 
@@ -321,6 +323,7 @@ def test_training_artifacts_are_allowlisted_and_logs_are_scrubbed(tmp_path: Path
     with TestClient(app) as client:
         log = client.get("/api/training-jobs/1/artifacts/log")
         image = client.get("/api/training-jobs/1/artifacts/confusion_matrix")
+        curve = client.get("/api/training-jobs/1/artifacts/results_curve")
         rejected = client.get("/api/training-jobs/1/artifacts/best")
 
     assert log.status_code == 200
@@ -328,6 +331,8 @@ def test_training_artifacts_are_allowlisted_and_logs_are_scrubbed(tmp_path: Path
     assert "redacted" in log.text
     assert image.status_code == 200
     assert image.headers["content-type"] == "image/png"
+    assert curve.status_code == 200
+    assert curve.headers["content-type"] == "image/png"
     assert rejected.status_code == 404
 
 

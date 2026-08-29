@@ -17,6 +17,8 @@ ARTIFACTS = {
     "best": "weights/best.pt",
     "last": "weights/last.pt",
     "confusion_matrix": "confusion_matrix.png",
+    "results_curve": "results.png",
+    "effective_config": "effective_config.json",
 }
 
 _RUN_KEY = re.compile(r"run-[0-9a-f]{32}\Z")

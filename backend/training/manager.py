@@ -284,7 +284,7 @@ class LocalTrainingManager:
         self._ingest_progress(active, job)
         if active.process.poll() is None:
             return
-        if self._ingest_terminal_result(active):
+        if self._ingest_terminal_result(active, job):
             self._clear_active(active)
 
     def _ingest_progress(self, active: _ActiveProcess, job: dict[str, object]) -> None:
@@ -308,9 +308,17 @@ class LocalTrainingManager:
             status="evaluating" if progress.current_epoch == progress.total_epochs else "running",
         )
 
-    def _ingest_terminal_result(self, active: _ActiveProcess) -> bool:
+    def _ingest_terminal_result(
+        self, active: _ActiveProcess, job: dict[str, object]
+    ) -> bool:
         try:
-            result = TrainingResult.from_json(json.loads(self._read_structured_artifact(active.run_key, "result")))
+            acceptance_config = job.get("acceptance_config")
+            if not isinstance(acceptance_config, dict):
+                acceptance_config = None
+            result = TrainingResult.from_json(
+                json.loads(self._read_structured_artifact(active.run_key, "result")),
+                acceptance_config=acceptance_config,
+            )
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
             return self._mark_invalid_result(active.job_id, active.run_key)
         if result.status == "failed":
@@ -329,6 +337,7 @@ class LocalTrainingManager:
         stored_metrics = {
             **result.metrics, "no_helmet_precision": no_helmet.get("precision"),
             "no_helmet_recall": no_helmet.get("recall"), "accepted": result.accepted,
+            "acceptance_checks": result.acceptance_checks,
         }
         return self._safe_mark_terminal(
             active.job_id, status="completed", metrics=stored_metrics, has_best=True,

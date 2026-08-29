@@ -183,6 +183,17 @@ def completed_result() -> dict[str, object]:
             },
         },
         "accepted": True,
+        "acceptance_checks": [
+            {
+                "scope": "overall",
+                "class_name": None,
+                "metric": "map50",
+                "threshold": 0.5,
+                "actual": 0.90,
+                "passed": True,
+                "reason": "threshold_met",
+            },
+        ],
         "best_sha256": "8f4375ec65c2c4092a1cc21e76712472eae0de999384e8327c495957121db9c2",
         "error_code": None,
         "error_message": None,
@@ -251,10 +262,47 @@ def test_manager_runs_one_process_and_ingests_progress_then_result(manager_conte
             "8f4375ec65c2c4092a1cc21e76712472eae0de999384e8327c495957121db9c2"
         )
         assert completed["no_helmet_recall"] == 0.92
+        assert completed["metrics"]["acceptance_checks"][0]["metric"] == "map50"
         assert repository.get_job(second["id"])["status"] == "running"
     finally:
         second_process.finish(1)
         manager.wake()
+        manager.stop()
+
+
+def test_manager_rejects_acceptance_checks_inconsistent_with_job_snapshot(
+    manager_context,
+):
+    """Catches a worker forging generic acceptance evidence before persistence."""
+    repository, storage, admin_id = manager_context
+    job = queued_job(repository, storage, admin_id, "forged-acceptance")
+    process = FakeProcess()
+    manager = LocalTrainingManager(
+        repository,
+        storage,
+        popen_factory=PopenRecorder([process]),
+        stop_timeout_seconds=0.02,
+    )
+
+    manager.start()
+    try:
+        wait_until(lambda: repository.get_job(job["id"])["status"] == "running")
+        best = storage.resolve_artifact(job["run_key"], "best")
+        best.parent.mkdir(parents=True)
+        best.write_bytes(b"best")
+        payload = completed_result()
+        payload["acceptance_checks"][0]["passed"] = False
+        storage.resolve_artifact(job["run_key"], "result").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        process.finish()
+        manager.wake()
+
+        wait_until(lambda: repository.get_job(job["id"])["status"] == "failed")
+        failed = repository.get_job(job["id"])
+        assert failed["error_code"] == "training_failed"
+        assert failed["has_metrics"] is False
+    finally:
         manager.stop()
 
 

@@ -70,7 +70,7 @@ _SAFE_JOB_FIELDS = (
     "resume_from_id", "created_at", "updated_at",
 )
 _DETAIL_JOB_FIELDS = ("advanced_config", "acceptance_config", "acceptance_checks")
-_PUBLIC_ARTIFACTS = frozenset({"log", "confusion_matrix"})
+_PUBLIC_ARTIFACTS = frozenset({"log", "confusion_matrix", "results_curve"})
 
 
 def _service(request: Request) -> TrainingService:
@@ -113,10 +113,16 @@ def _public_job(job: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
     )
     if detail:
         result.update({key: job.get(key) for key in _DETAIL_JOB_FIELDS})
+        metrics = job.get("metrics")
+        if isinstance(metrics, dict):
+            result["acceptance_checks"] = metrics.get("acceptance_checks")
         base = f"/api/training-jobs/{job_id}/artifacts"
         result["log_url"] = f"{base}/log"
         result["confusion_matrix_url"] = (
             f"{base}/confusion_matrix" if result.get("has_metrics") else None
+        )
+        result["results_curve_url"] = (
+            f"{base}/results_curve" if result.get("has_metrics") else None
         )
     return result
 

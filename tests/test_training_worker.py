@@ -16,6 +16,11 @@ from training.contracts import (
     extract_metrics,
     meets_acceptance,
 )
+from training.configuration import (
+    evaluate_acceptance,
+    normalize_acceptance_config,
+    resolve_training_config,
+)
 from training.worker import main
 
 
@@ -64,6 +69,33 @@ def manifest_payload(tmp_path: Path, **overrides: object) -> dict[str, object]:
     }
     values.update(overrides)
     return values
+
+
+def advanced_manifest_payload(
+    tmp_path: Path,
+    *,
+    classes: list[str] | None = None,
+    acceptance_config: dict[str, object] | None = None,
+    **overrides: object,
+) -> dict[str, object]:
+    payload = manifest_payload(tmp_path)
+    selected_classes = classes or ["person", "helmet", "no_helmet"]
+    payload.update(
+        config_schema_version=1,
+        dataset_classes=selected_classes,
+        advanced_config=resolve_training_config(
+            mode="advanced",
+            profile="high_recall",
+            overrides={"lr0": 0.002, "workers": 4},
+            epochs=int(payload["epochs"]),
+        ),
+        acceptance_config=(
+            acceptance_config
+            or normalize_acceptance_config(None, classes=selected_classes)
+        ),
+    )
+    payload.update(overrides)
+    return payload
 
 
 def test_contracts_validate_json_types_and_round_trip(tmp_path: Path):
@@ -126,6 +158,35 @@ def test_manifest_accepts_only_a_contained_resume_checkpoint(tmp_path: Path):
     assert manifest.to_json() == payload
 
 
+def test_advanced_manifest_round_trips_complete_versioned_snapshots(tmp_path: Path):
+    """Catches worker manifests dropping reproducible config or arbitrary classes."""
+    payload = advanced_manifest_payload(tmp_path, classes=["fire", "smoke"])
+
+    manifest = TrainingManifest.from_json(payload)
+
+    assert manifest.to_json() == payload
+    assert manifest.dataset_classes == ("fire", "smoke")
+    assert manifest.advanced_config["optimizer"] == "AdamW"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("config_schema_version", 2),
+        ("advanced_config", {"optimizer": "AdamW", "command": "format C:"}),
+    ],
+)
+def test_advanced_manifest_rejects_unknown_schema_and_partial_or_arbitrary_config(
+    tmp_path: Path, field: str, value: object
+):
+    """Catches unversioned or client-controlled keys crossing into YOLO.train."""
+    payload = advanced_manifest_payload(tmp_path)
+    payload[field] = value
+
+    with pytest.raises(ValueError):
+        TrainingManifest.from_json(payload)
+
+
 @pytest.mark.parametrize("contract", ["manifest", "progress", "result"])
 def test_contracts_reject_extra_fields(tmp_path: Path, contract: str):
     """Catches injected commands or unversioned fields crossing JSON boundaries."""
@@ -165,6 +226,45 @@ def valid_completed_result() -> dict[str, object]:
         "error_code": None,
         "error_message": None,
     }
+
+
+def test_generic_result_validates_acceptance_checks_against_snapshot():
+    """Catches forged worker acceptance or failure explanations."""
+    metrics = {
+        "precision": 0.72,
+        "recall": 0.77,
+        "map50": 0.8,
+        "map50_95": 0.55,
+        "classes": {
+            "fire": {
+                "precision": 0.79,
+                "recall": 0.81,
+                "map50": 0.83,
+                "map50_95": 0.58,
+            }
+        },
+    }
+    config = normalize_acceptance_config(
+        {"overall": {"map50": 0.75}, "classes": {"fire": {"recall": 0.8}}},
+        classes=["fire"],
+    )
+    accepted, checks = evaluate_acceptance(metrics, config)
+    payload = {
+        "status": "completed",
+        "metrics": metrics,
+        "accepted": accepted,
+        "acceptance_checks": checks,
+        "best_sha256": "a" * 64,
+        "error_code": None,
+        "error_message": None,
+    }
+
+    result = TrainingResult.from_json(payload, acceptance_config=config)
+
+    assert result.acceptance_checks == checks
+    forged = {**payload, "acceptance_checks": [{**checks[0], "passed": False}] + checks[1:]}
+    with pytest.raises(ValueError):
+        TrainingResult.from_json(forged, acceptance_config=config)
 
 
 @pytest.mark.parametrize(
@@ -432,6 +532,7 @@ class FakeYOLO:
         weights.mkdir(parents=True)
         (weights / "best.pt").write_bytes(b"best checkpoint")
         (weights / "last.pt").write_bytes(b"last checkpoint")
+        (weights.parent / "results.png").write_bytes(b"results curve")
         return SimpleNamespace(save_dir=weights.parent)
 
     def val(self, **kwargs):
@@ -535,8 +636,105 @@ def test_worker_dispatches_training_progress_test_evaluation_and_digest(
     assert (
         Path(str(payload["run_dir"])) / "confusion_matrix.png"
     ).read_bytes() == b"confusion matrix"
+    assert (Path(str(payload["run_dir"])) / "results.png").read_bytes() == b"results curve"
     assert os.environ["YOLO_CONFIG_DIR"] == str(tmp_path / "data")
     assert os.environ["MPLCONFIGDIR"] == str(tmp_path / "data" / "matplotlib")
+
+
+def test_worker_maps_only_canonical_advanced_fields_to_yolo_train(tmp_path: Path):
+    """Catches advanced keys being omitted or service-owned paths being overridden."""
+    payload = advanced_manifest_payload(tmp_path)
+    manifest_path = Path(str(payload["run_dir"])) / "manifest.json"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert main(
+        ["--manifest", str(manifest_path)],
+        yolo_cls=FakeYOLO,
+        cuda_available=lambda: True,
+        project_root=tmp_path,
+    ) == 0
+
+    call = FakeYOLO.instances[0].train_calls[0]
+    assert call["optimizer"] == "AdamW"
+    assert call["lr0"] == 0.002
+    assert call["mixup"] == 0.1
+    assert call["workers"] == 4
+    assert set(call) == {
+        "data",
+        "epochs",
+        "imgsz",
+        "batch",
+        "device",
+        "project",
+        "name",
+        "exist_ok",
+        "patience",
+        *payload["advanced_config"],
+    }
+    assert "run_dir" not in call
+    assert "model_cache_dir" not in call
+    assert call["project"] == payload["run_dir"]
+    effective = json.loads(
+        (Path(str(payload["run_dir"])) / "effective_config.json").read_text("utf-8")
+    )
+    assert effective == {
+        "config_schema_version": 1,
+        "base": {
+            "base_model": "yolo11m.pt",
+            "epochs": 100,
+            "imgsz": 640,
+            "batch": "auto",
+            "device": "auto",
+            "patience": 50,
+        },
+        "advanced_config": payload["advanced_config"],
+    }
+    serialized = json.dumps(effective)
+    assert str(tmp_path) not in serialized
+    for forbidden in ("data", "project", "name", "save_dir", "resume"):
+        assert forbidden not in effective
+
+
+class GenericFakeYOLO(FakeYOLO):
+    def val(self, **kwargs):
+        metrics = super().val(**kwargs)
+        metrics.names = {2: "fire", 5: "smoke"}
+        metrics.box.ap_class_index = [2, 5]
+        metrics.box.p = [0.79, 0.74]
+        metrics.box.r = [0.81, 0.76]
+        metrics.box.ap50 = [0.83, 0.78]
+        metrics.box.ap = [0.58, 0.52]
+        metrics.box.maps = [0.0, 0.0, 0.58, 0.0, 0.0, 0.52]
+        metrics.box.map50 = 0.8
+        return metrics
+
+
+def test_worker_emits_dynamic_arbitrary_classes_and_generic_acceptance(tmp_path: Path):
+    """Catches hard-coded helmet metrics replacing arbitrary dataset classes."""
+    config = normalize_acceptance_config(
+        {"overall": {"map50": 0.75}, "classes": {"fire": {"recall": 0.8}}},
+        classes=["fire", "smoke"],
+    )
+    payload = advanced_manifest_payload(
+        tmp_path, classes=["fire", "smoke"], acceptance_config=config
+    )
+    manifest_path = Path(str(payload["run_dir"])) / "manifest.json"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert main(
+        ["--manifest", str(manifest_path)],
+        yolo_cls=GenericFakeYOLO,
+        cuda_available=lambda: False,
+        project_root=tmp_path,
+    ) == 0
+
+    result = json.loads(
+        (Path(str(payload["run_dir"])) / "result.json").read_text("utf-8")
+    )
+    assert result["accepted"] is True
+    assert result["metrics"]["classes"]["fire"]["recall"] == 0.81
+    assert result["acceptance_checks"][0]["metric"] == "map50"
+    assert result["acceptance_checks"][-1]["class_name"] == "fire"
 
 
 def test_worker_resolves_auto_device_to_cpu_and_numeric_batch(tmp_path: Path):

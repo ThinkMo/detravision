@@ -18,8 +18,8 @@ from training.contracts import (
     TrainingResult,
     atomic_write_json,
     extract_metrics,
-    meets_acceptance,
 )
+from training.configuration import evaluate_acceptance
 from training.train import PROJECT_ROOT, configure_runtime, resolve_device
 
 
@@ -123,6 +123,12 @@ def _copy_canonical_weights(run_dir: Path) -> Path:
     return destination_best
 
 
+def _copy_results_curve(run_dir: Path) -> None:
+    source = _contained(run_dir / "train" / "results.png", run_dir)
+    if source.is_file():
+        shutil.copy2(source, _contained(run_dir / "results.png", run_dir))
+
+
 def _copy_confusion_matrix(raw_metrics: object, run_dir: Path) -> None:
     expected_save_dir = _contained(run_dir / "test", run_dir)
     raw_save_dir = getattr(raw_metrics, "save_dir", None)
@@ -156,11 +162,27 @@ def _write_failure(run_dir: Path, code: str) -> None:
         status="failed",
         metrics=None,
         accepted=False,
+        acceptance_checks=[],
         best_sha256=None,
         error_code=code,
         error_message=ERROR_MESSAGES[code],
     )
     atomic_write_json(run_dir / "result.json", result.to_json())
+
+
+def _effective_config(manifest: TrainingManifest) -> dict[str, object]:
+    return {
+        "config_schema_version": manifest.config_schema_version,
+        "base": {
+            "base_model": manifest.base_model,
+            "epochs": manifest.epochs,
+            "imgsz": manifest.imgsz,
+            "batch": manifest.batch,
+            "device": manifest.device,
+            "patience": manifest.patience,
+        },
+        "advanced_config": manifest.advanced_config,
+    }
 
 
 def _is_cuda_oom(exc: BaseException) -> bool:
@@ -239,13 +261,19 @@ def _execute_manifest(
                 exist_ok=True,
                 patience=manifest.patience,
             )
+            if not manifest._legacy:
+                train_arguments.update(manifest.advanced_config)
             if manifest.resume_checkpoint is not None:
                 train_arguments["resume"] = True
                 train_arguments["save_dir"] = str(
                     _contained(run_dir / "train", run_dir)
                 )
+            atomic_write_json(
+                run_dir / "effective_config.json", _effective_config(manifest)
+            )
             model.train(**train_arguments)
             best_path = _copy_canonical_weights(run_dir)
+            _copy_results_curve(run_dir)
         except Exception as exc:
             if _is_cuda_oom(exc):
                 code = "cuda_oom"
@@ -275,10 +303,14 @@ def _execute_manifest(
             code = "cuda_oom" if _is_cuda_oom(exc) else "evaluation_failed"
             raise WorkerFailure(code, "evaluate") from exc
 
+        accepted, acceptance_checks = evaluate_acceptance(
+            metrics, manifest.acceptance_config
+        )
         result = TrainingResult(
             status="completed",
             metrics=metrics,
-            accepted=meets_acceptance(metrics),
+            accepted=accepted,
+            acceptance_checks=acceptance_checks,
             best_sha256=_sha256(best_path),
             error_code=None,
             error_message=None,
