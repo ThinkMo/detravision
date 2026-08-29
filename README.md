@@ -279,7 +279,9 @@ TRAINING_DATASET_ROOTS=construction=D:\datasets\construction;customer=D:\dataset
 
 每个分片必须同时存在对应标签目录，例如 `images/train` 对应 `labels/train`。新建训练时必须选择一个可用训练集；系统会把配置快照写入任务自己的 `dataset.yaml`，之后数据集被停用也不会改变已有任务的配置。基础模型下拉框只允许选择项目根目录或 `TRAINING_MODEL_CACHE_DIR` 中实际存在的 `.pt` 权重。
 
-从原始 Construction-PPE ZIP 构建三类训练集，以及通过管理控制台或 CLI 执行冒烟训练、正式训练、停止后续训、测试集评估、候选模型注册和启用的完整步骤见 [训练集构建与模型训练指南](docs/training-guide.md)。
+训练平台支持任意类别的 YOLO 矩形框目标检测。新建任务可使用基础模式，或选择均衡、小目标、高召回、稳定微调、自定义五种高级预设，并在服务端白名单内调整学习率、增强、运行和损失权重；任务会保存不可变配置与验收快照。完成后可复制任务调整参数，并对比 2～4 个使用同一训练集发布快照的实验。Construction-PPE 的 `person`、`helmet`、`no_helmet` 只是内置安全帽模板，不是平台的类别限制。
+
+从原始 Construction-PPE ZIP 构建三类训练集，以及通过管理控制台或 CLI 执行冒烟训练、正式训练、停止后续训、通用测试集评估、候选模型注册和启用的完整步骤见 [训练集构建与模型训练指南](docs/training-guide.md)。
 
 在管理控制台中复制已发布版本、扫描新增无标签图片、鼠标框选人工标注、校验并发布新训练/测评集的操作见 [训练集版本与人工标注指南](docs/dataset-annotation-guide.md)。
 

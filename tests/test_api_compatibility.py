@@ -194,8 +194,13 @@ def test_model_routes_preserve_response_statuses_and_keys(api_app):
     assert set(model) == {
         "id", "name", "runtime", "classes", "map50", "is_active", "created_at",
         "training_job_id", "source", "base_model", "imgsz", "metrics_json",
-        "deployment_runtime",
+        "deployment_runtime", "metrics", "training_profile", "training_config",
+        "dataset_manifest_digest", "accepted",
     }
+    assert model["training_profile"] is None
+    assert model["training_config"] is None
+    assert model["dataset_manifest_digest"] is None
+    assert model["accepted"] is None
 
     activated = request(api_app, "POST", f"/api/models/{model['id']}/activate")
     assert activated.status_code == 200
