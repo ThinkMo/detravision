@@ -13,6 +13,9 @@ const TRAINING_ERRORS: Record<string, string> = {
   evaluation_failed: "测试集评估失败，请检查测试集标注和任务日志。",
   interrupted: "训练进程已中断，可在检查环境后尝试恢复。",
   worker_exit: "训练进程异常退出，请检查 Python、PyTorch 和 Ultralytics 环境。",
+  training_config_invalid: "高级训练参数无效，请根据字段提示修正后重试。",
+  training_profile_invalid: "训练预设不可用，请重新选择预设。",
+  acceptance_class_unknown: "验收规则包含训练集中不存在的类别。",
 };
 
 export function trainingErrorMessage(code?: string | null, fallback?: string | null) {

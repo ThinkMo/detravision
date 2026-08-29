@@ -99,12 +99,60 @@ export interface TrainingMetrics extends TrainingMetricSet {
   classes?: Record<string, TrainingMetricSet>;
 }
 
+export type TrainingProfile = "balanced" | "small_object" | "high_recall" | "stable_finetune" | "custom" | "legacy";
+export type TrainingAdvancedValue = string | number | boolean;
+export type TrainingAdvancedConfig = Record<string, TrainingAdvancedValue>;
+export type TrainingAcceptanceMetric = "precision" | "recall" | "map50" | "map50_95";
+export type TrainingAcceptanceThresholds = Partial<Record<TrainingAcceptanceMetric, number | null>>;
+
+export interface TrainingAcceptanceConfig {
+  schema_version: number;
+  overall: TrainingAcceptanceThresholds;
+  classes: Record<string, TrainingAcceptanceThresholds>;
+}
+
+export interface TrainingProfileCatalogItem {
+  id: Exclude<TrainingProfile, "legacy">;
+  label: string;
+  description: string;
+  recommended: { imgsz: 640 | 960; epochs: number; patience: number };
+  overrides: TrainingAdvancedConfig;
+}
+
+export interface TrainingAdvancedFieldDescriptor {
+  type: "number" | "integer" | "boolean" | "string";
+  label: string;
+  help: string;
+  default: TrainingAdvancedValue;
+  min?: number;
+  max?: number;
+  choices?: TrainingAdvancedValue[];
+}
+
+export interface TrainingAcceptanceTemplate {
+  id: string;
+  label: string;
+  required_classes: string[];
+  config: TrainingAcceptanceConfig;
+}
+
 export interface TrainingCatalog {
   models: Array<{ id: string; series: string; size: string; available: boolean }>;
   executors: Array<{ id: "local" | "remote"; enabled: boolean }>;
   dataset: { id: string; available: boolean; has_test_split: boolean; classes: string[] };
   datasets: TrainingDataset[];
   default_dataset_key: string | null;
+  config_schema_version?: number;
+  profile_version?: number;
+  training_profiles?: TrainingProfileCatalogItem[];
+  advanced_config_schema?: {
+    groups: Array<{ id: string; label: string; fields: string[] }>;
+    fields: Record<string, TrainingAdvancedFieldDescriptor>;
+  };
+  acceptance_schema?: {
+    metrics: TrainingAcceptanceMetric[];
+    templates: TrainingAcceptanceTemplate[];
+  };
 }
 
 export interface TrainingDataset {
@@ -218,6 +266,11 @@ export interface TrainingJobCreate {
   batch: "1" | "2" | "4" | "8" | "auto";
   device: "auto" | "cpu" | "0";
   patience: number;
+  mode: "basic" | "advanced";
+  profile: Exclude<TrainingProfile, "legacy">;
+  advanced_config: Partial<TrainingAdvancedConfig>;
+  acceptance_config: TrainingAcceptanceConfig;
+  acceptance_template?: string | null;
 }
 
 export interface AuditLog {

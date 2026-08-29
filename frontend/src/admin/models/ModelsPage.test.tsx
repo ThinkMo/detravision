@@ -14,6 +14,31 @@ const catalog = {
   dataset: { id: "configured", available: true, has_test_split: true, classes: ["helmet", "no_helmet"] },
   datasets: [{ id: 3, key: "dataset:3", name: "工地安全帽", root_alias: "primary", directory: "site-a", train_split: "images/train", val_split: "images/val", test_split: "images/test", classes: ["person", "helmet", "no_helmet"], enabled: true, available: true, reason: null }],
   default_dataset_key: "dataset:3",
+  config_schema_version: 1,
+  profile_version: 1,
+  training_profiles: [
+    { id: "balanced", label: "均衡", description: "通用默认基线", recommended: { imgsz: 640, epochs: 100, patience: 50 }, overrides: {} },
+    { id: "small_object", label: "小目标增强", description: "远处和小尺寸目标", recommended: { imgsz: 960, epochs: 100, patience: 50 }, overrides: {} },
+    { id: "high_recall", label: "高召回", description: "优先降低漏检", recommended: { imgsz: 640, epochs: 150, patience: 75 }, overrides: { optimizer: "AdamW", lr0: 0.001 } },
+    { id: "stable_finetune", label: "稳定微调", description: "低学习率微调", recommended: { imgsz: 640, epochs: 50, patience: 20 }, overrides: { optimizer: "AdamW", lr0: 0.001 } },
+    { id: "custom", label: "自定义", description: "从均衡配置开始", recommended: { imgsz: 640, epochs: 100, patience: 50 }, overrides: {} },
+  ],
+  advanced_config_schema: {
+    groups: [{ id: "optimization", label: "优化器与学习率", fields: ["optimizer", "lr0"] }, { id: "augmentation", label: "数据增强", fields: ["close_mosaic"] }, { id: "runtime", label: "运行与复现", fields: ["cache"] }],
+    fields: {
+      optimizer: { label: "优化器", type: "string", choices: ["auto", "SGD", "Adam", "AdamW"], default: "auto", help: "参数更新算法" },
+      lr0: { label: "初始学习率", type: "number", min: 0.000001, max: 0.1, default: 0.01, help: "训练开始时的学习率" },
+      close_mosaic: { label: "关闭 Mosaic 轮次", type: "integer", min: 0, max: 1000, default: 10, help: "最后若干轮关闭 Mosaic" },
+      cache: { label: "图片缓存", type: "string", choices: ["false", "ram", "disk"], default: "false", help: "RAM 缓存需要较多内存" },
+    },
+  },
+  acceptance_schema: {
+    metrics: ["precision", "recall", "map50", "map50_95"],
+    templates: [
+      { id: "generic", label: "通用验收", required_classes: [], config: { schema_version: 1, overall: { precision: null, recall: null, map50: 0.5, map50_95: null }, classes: {} } },
+      { id: "safety_helmet", label: "安全帽验收", required_classes: ["person", "helmet", "no_helmet"], config: { schema_version: 1, overall: { precision: null, recall: null, map50: 0.85, map50_95: null }, classes: { no_helmet: { precision: 0.85, recall: 0.9, map50: null, map50_95: null } } } },
+    ],
+  },
 };
 
 function renderPage() {
@@ -59,7 +84,80 @@ describe("model training console", () => {
     expect(within(dialog).getByLabelText("输入尺寸")).toHaveValue("640");
 
     await userEvent.click(within(dialog).getByRole("button", { name: "开始训练" }));
-    await waitFor(() => expect(createBody).toMatchObject({ executor: "local", base_model: "yolo11m.pt", imgsz: 640, epochs: 100, batch: "auto", device: "auto", patience: 50 }));
+    await waitFor(() => expect(createBody).toMatchObject({ executor: "local", base_model: "yolo11m.pt", imgsz: 640, epochs: 100, batch: "auto", device: "auto", patience: 50, mode: "basic", profile: "balanced", advanced_config: {}, acceptance_config: { schema_version: 1, overall: { map50: 0.5 } } }));
+  });
+
+  it("builds an advanced request from the selected catalog preset and user overrides", async () => {
+    let createBody: Record<string, unknown> | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/models") return json([]);
+      if (path === "/api/training/catalog") return json(catalog);
+      if (path === "/api/training-jobs" && init?.method === "POST") { createBody = JSON.parse(String(init.body)); return json({ id: 30 }, 201); }
+      if (path.startsWith("/api/training-jobs")) return json({ items: [], total: 0, page: 1, page_size: 20 });
+      throw new Error(`Unexpected request ${path}`);
+    }));
+
+    renderPage();
+    await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
+    await userEvent.click(await screen.findByRole("button", { name: "新建训练" }));
+    const dialog = screen.getByRole("dialog", { name: "新建本地训练" });
+    await userEvent.click(within(dialog).getByRole("tab", { name: "高级模式" }));
+    expect(within(dialog).getAllByLabelText("训练预设")[0]).toHaveValue("balanced");
+    for (const label of ["均衡", "小目标增强", "高召回", "稳定微调", "自定义"]) expect(within(dialog).getByRole("option", { name: new RegExp(`^${label} —`) })).toBeInTheDocument();
+    await userEvent.selectOptions(within(dialog).getAllByLabelText("训练预设")[0], "high_recall");
+    await userEvent.clear(within(dialog).getByLabelText("初始学习率"));
+    await userEvent.type(within(dialog).getByLabelText("初始学习率"), "0.002");
+    await userEvent.click(within(dialog).getByText("最终配置摘要"));
+    const summary = within(dialog).getByText("最终配置摘要").parentElement!;
+    expect(within(summary).getByText("lr0")).toBeInTheDocument();
+    expect(within(summary).getByText("0.002")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "开始训练" }));
+
+    await waitFor(() => expect(createBody).toMatchObject({ mode: "advanced", profile: "high_recall", imgsz: 640, epochs: 150, patience: 75, advanced_config: { lr0: 0.002 }, acceptance_config: { overall: { map50: 0.5 } } }));
+  });
+
+  it("shows catalog range and combination errors and explains why submission is disabled", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/models") return json([]);
+      if (path === "/api/training/catalog") return json(catalog);
+      if (path.startsWith("/api/training-jobs")) return json({ items: [], total: 0, page: 1, page_size: 20 });
+      throw new Error(`Unexpected request ${path}`);
+    }));
+    renderPage();
+    await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
+    await userEvent.click(await screen.findByRole("button", { name: "新建训练" }));
+    const dialog = screen.getByRole("dialog", { name: "新建本地训练" });
+    await userEvent.click(within(dialog).getByRole("tab", { name: "高级模式" }));
+    await userEvent.clear(within(dialog).getByLabelText("初始学习率"));
+    await userEvent.type(within(dialog).getByLabelText("初始学习率"), "0.2");
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("初始学习率必须在 0.000001 到 0.1 之间");
+    expect(within(dialog).getByRole("button", { name: "开始训练" })).toBeDisabled();
+    expect(within(dialog).getByText(/修正高级参数后才能开始训练/)).toBeInTheDocument();
+  });
+
+  it("edits acceptance thresholds for arbitrary dataset classes", async () => {
+    const genericCatalog = { ...catalog, datasets: [{ ...catalog.datasets[0], classes: ["fire", "smoke"] }] };
+    let createBody: Record<string, unknown> | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/models") return json([]);
+      if (path === "/api/training/catalog") return json(genericCatalog);
+      if (path === "/api/training-jobs" && init?.method === "POST") { createBody = JSON.parse(String(init.body)); return json({ id: 31 }, 201); }
+      if (path.startsWith("/api/training-jobs")) return json({ items: [], total: 0, page: 1, page_size: 20 });
+      throw new Error(`Unexpected request ${path}`);
+    }));
+    renderPage();
+    await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
+    await userEvent.click(await screen.findByRole("button", { name: "新建训练" }));
+    const dialog = screen.getByRole("dialog", { name: "新建本地训练" });
+    await userEvent.click(within(dialog).getByRole("tab", { name: "高级模式" }));
+    expect(within(dialog).getByRole("option", { name: /安全帽验收/ })).toBeDisabled();
+    await userEvent.click(within(dialog).getByLabelText("启用 fire 类别验收"));
+    await userEvent.type(within(dialog).getByLabelText("fire 召回率"), "0.8");
+    await userEvent.click(within(dialog).getByRole("button", { name: "开始训练" }));
+    await waitFor(() => expect(createBody).toMatchObject({ acceptance_config: { classes: { fire: { recall: 0.8 } } } }));
   });
 
   it("requires confirmation before running a medium or larger model on CPU", async () => {

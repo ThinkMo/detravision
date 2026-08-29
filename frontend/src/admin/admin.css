@@ -84,6 +84,24 @@
 .training-accepted { color: #08715e; }
 .training-rejected, .training-error, .training-warning { color: var(--color-danger); }
 .training-warning { margin: 0; padding: .65rem; border-radius: var(--radius-sm); background: #fff6e5; }
+.training-form--wide { width: min(92vw, 68rem); max-height: 84vh; overflow: auto; }
+.training-mode-tabs { display: flex; gap: .25rem; width: fit-content; padding: .25rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: #f7f9f8; }
+.training-mode-tabs button { padding: .48rem .8rem; color: var(--color-text-muted); border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; }
+.training-mode-tabs button.is-active { color: #086a59; background: #e6f7f2; font-weight: 700; }
+.training-mode-tabs button:disabled { cursor: not-allowed; opacity: .5; }
+.training-basic-grid, .training-advanced-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .8rem; }
+.training-advanced { display: grid; gap: 1rem; }
+.training-advanced fieldset { background: #fbfcfc; }
+.training-advanced legend { color: var(--color-text); font-weight: 750; }
+.training-advanced label small { color: var(--color-text-muted); font-weight: 400; }
+.training-class-thresholds { display: grid; gap: .65rem; }
+.training-class-thresholds section { display: grid; gap: .55rem; padding: .65rem; border-radius: var(--radius-sm); background: #fff; }
+.training-config-summary { padding: .8rem; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: #f7f9f8; }
+.training-config-summary summary { color: #08715e; font-weight: 700; cursor: pointer; }
+.training-config-summary dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .6rem; margin-bottom: 0; }
+.training-config-summary dt { color: var(--color-text-muted); font-size: .75rem; }
+.training-config-summary dd { margin: .18rem 0 0; font-weight: 700; }
+.training-form__status { color: var(--color-text-muted); font-size: .82rem; }
 .training-detail-dialog { width: min(92vw, 60rem); max-height: 90vh; overflow: auto; }
 .training-log { max-height: 18rem; overflow: auto; padding: .8rem; color: #d9f3ec; border-radius: var(--radius-sm); background: #102421; white-space: pre-wrap; word-break: break-word; }
 .training-artifact { display: block; max-width: 100%; border-radius: var(--radius-sm); }
