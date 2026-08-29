@@ -42,7 +42,7 @@ function AcceptanceFields({ catalog, datasetClasses, templateId, value, onTempla
     onChange({ ...value, classes });
   };
   return <fieldset className="training-acceptance"><legend>通用验收规则</legend>
-    {schema?.templates.length ? <label>验收模板<select aria-label="验收模板" value={templateId} onChange={(event) => onTemplate(event.target.value)}>{schema.templates.map((template) => { const compatible = template.required_classes.every((item) => datasetClasses.includes(item)); return <option key={template.id} value={template.id} disabled={!compatible}>{template.label}{compatible ? "" : "（类别不兼容）"}</option>; })}</select></label> : null}
+    {schema?.templates.length ? <label>验收模板<select aria-label="验收模板" value={templateId} onChange={(event) => onTemplate(event.target.value)}>{templateId === "" ? <option value="">复制的自定义验收</option> : null}{schema.templates.map((template) => { const compatible = template.required_classes.every((item) => datasetClasses.includes(item)); return <option key={template.id} value={template.id} disabled={!compatible}>{template.label}{compatible ? "" : "（类别不兼容）"}</option>; })}</select></label> : null}
     <div className="training-advanced-grid">{metrics.map((metric) => <label key={metric}>总体 {METRIC_LABELS[metric]}<input aria-label={`总体 ${METRIC_LABELS[metric]}`} type="number" min={0} max={1} step="0.01" value={value.overall[metric] ?? ""} onChange={(event) => setMetric("overall", metric, event.target.value)} /></label>)}</div>
     <div className="training-class-thresholds">{datasetClasses.map((className) => { const enabled = Object.hasOwn(value.classes, className); return <section key={className}><label className="admin-check"><input type="checkbox" aria-label={`启用 ${className} 类别验收`} checked={enabled} onChange={(event) => toggleClass(className, event.target.checked)} /><strong>{className}</strong></label>{enabled ? <div className="training-advanced-grid">{metrics.map((metric) => <label key={metric}>{METRIC_LABELS[metric]}<input aria-label={`${className} ${METRIC_LABELS[metric]}`} type="number" min={0} max={1} step="0.01" value={value.classes[className]?.[metric] ?? ""} onChange={(event) => setMetric(className, metric, event.target.value)} /></label>)}</div> : null}</section>; })}</div>
   </fieldset>;
@@ -61,15 +61,15 @@ function validateAdvanced(catalog: TrainingCatalog, values: Record<string, Train
   return errors;
 }
 
-export function TrainingJobDialog({ catalog, pending, error, onClose, onSubmit }: { catalog: TrainingCatalog; pending: boolean; error: string; onClose: () => void; onSubmit: (value: TrainingJobCreate) => void }) {
+export function TrainingJobDialog({ catalog, initialRequest, pending, error, onClose, onSubmit }: { catalog: TrainingCatalog; initialRequest?: TrainingJobCreate | null; pending: boolean; error: string; onClose: () => void; onSubmit: (value: TrainingJobCreate) => void }) {
   const availableModels = catalog.models.filter((model) => model.available);
   const preferred = availableModels.some((model) => model.id === "yolo11m.pt") ? "yolo11m.pt" : availableModels[0]?.id ?? "";
   const profiles = catalogProfiles(catalog);
   const balanced = profiles.find((item) => item.id === "balanced") ?? profiles[0];
   const genericTemplate = catalog.acceptance_schema?.templates.find((item) => item.id === "generic") ?? catalog.acceptance_schema?.templates[0];
-  const [form, setForm] = useState<Omit<TrainingJobCreate, "advanced_config" | "acceptance_config">>({ ...DEFAULTS, dataset_key: catalog.default_dataset_key ?? "", base_model: preferred, mode: "basic", profile: "balanced", acceptance_template: genericTemplate?.id ?? null });
-  const [advancedOverrides, setAdvancedOverrides] = useState<Record<string, TrainingAdvancedValue | "">>({});
-  const [acceptance, setAcceptance] = useState(() => cloneAcceptance(genericTemplate?.config));
+  const [form, setForm] = useState<Omit<TrainingJobCreate, "advanced_config" | "acceptance_config">>(() => initialRequest ? (({ advanced_config: _advanced, acceptance_config: _acceptance, ...base }) => base)(initialRequest) : { ...DEFAULTS, dataset_key: catalog.default_dataset_key ?? "", base_model: preferred, mode: "basic", profile: "balanced", acceptance_template: genericTemplate?.id ?? null });
+  const [advancedOverrides, setAdvancedOverrides] = useState<Record<string, TrainingAdvancedValue | "">>(() => Object.fromEntries(Object.entries(initialRequest?.advanced_config ?? {}).filter((entry): entry is [string, TrainingAdvancedValue] => entry[1] !== undefined)));
+  const [acceptance, setAcceptance] = useState(() => cloneAcceptance(initialRequest?.acceptance_config ?? genericTemplate?.config));
   const [confirmRisk, setConfirmRisk] = useState<"cpu" | "heavy" | "ram" | null>(null);
   const selectedProfile = profiles.find((item) => item.id === form.profile) ?? balanced;
   const selectedDataset = catalog.datasets.find((item) => item.key === form.dataset_key);

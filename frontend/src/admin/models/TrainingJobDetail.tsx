@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import type { TrainingJob, TrainingMetricSet } from "../../api/types";
+import type { TrainingAcceptanceCheck, TrainingJob, TrainingJobDetail as TrainingJobDetailType, TrainingMetricSet } from "../../api/types";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { LoadingPanel } from "../../components/LoadingPanel";
 import { ModalDialog } from "../shared";
@@ -16,21 +16,49 @@ export function TrainingMetricsSummary({ job }: { job: TrainingJob }) {
   const classes = Object.entries(job.metrics?.classes ?? {});
   return <div className="training-metrics">
     <strong className={job.accepted ? "training-accepted" : "training-rejected"}>{job.accepted ? "已达标" : "未达标"}</strong>
-    <dl><div><dt>mAP50</dt><dd>{percent(job.map50)}</dd></div><div><dt>mAP50-95</dt><dd>{percent(job.map50_95)}</dd></div><div><dt>未佩戴安全帽精确率</dt><dd>{percent(job.no_helmet_precision)}</dd></div><div><dt>未佩戴安全帽召回率</dt><dd>{percent(job.no_helmet_recall)}</dd></div></dl>
+    <dl><div><dt>总体精确率</dt><dd>{percent(job.metrics?.precision ?? job.precision)}</dd></div><div><dt>总体召回率</dt><dd>{percent(job.metrics?.recall ?? job.recall)}</dd></div><div><dt>mAP50</dt><dd>{percent(job.metrics?.map50 ?? job.map50)}</dd></div><div><dt>mAP50-95</dt><dd>{percent(job.metrics?.map50_95 ?? job.map50_95)}</dd></div></dl>
     {classes.length ? <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>类别</th><th>精确率</th><th>召回率</th><th>mAP50</th><th>mAP50-95</th></tr></thead><tbody>{classes.map(([name, metrics]) => <MetricRow key={name} name={name} metrics={metrics} />)}</tbody></table></div> : null}
   </div>;
 }
 
-export function TrainingJobDetail({ jobId, onClose }: { jobId: number; onClose: () => void }) {
+const checkReason = (check: TrainingAcceptanceCheck) => check.passed
+  ? "通过"
+  : check.reason === "metric_missing"
+    ? "指标缺失"
+    : check.reason === "threshold_not_met" || check.reason === "below_threshold"
+      ? "低于门槛"
+      : check.reason;
+
+function JobConfiguration({ job }: { job: TrainingJobDetailType }) {
+  const advanced = Object.entries(job.advanced_config ?? {});
+  const checks = job.acceptance_checks ?? [];
+  const acceptance = job.acceptance_config;
+  const thresholds = [
+    ...Object.entries(acceptance?.overall ?? {}).filter((entry) => entry[1] != null).map(([metric, value]) => ({ label: `总体 ${metric}`, value })),
+    ...Object.entries(acceptance?.classes ?? {}).flatMap(([className, metrics]) => Object.entries(metrics).filter((entry) => entry[1] != null).map(([metric, value]) => ({ label: `${className} ${metric}`, value }))),
+  ];
+  return <div className="training-detail-config">
+    <h3>训练配置</h3>
+    <dl><div><dt>训练集</dt><dd>{job.dataset_key ?? "—"}</dd></div><div><dt>基础模型</dt><dd>{job.base_model}</dd></div><div><dt>输入尺寸</dt><dd>{job.imgsz}</dd></div><div><dt>轮次</dt><dd>{job.epochs}</dd></div><div><dt>批次</dt><dd>{job.batch}</dd></div><div><dt>设备</dt><dd>{job.device}</dd></div><div><dt>早停耐心</dt><dd>{job.patience}</dd></div><div><dt>预设</dt><dd>{job.training_profile === "legacy" || !job.training_profile ? "传统默认配置" : job.training_profile}</dd></div><div><dt>Schema</dt><dd>v{job.config_schema_version ?? 1}</dd></div>{advanced.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{String(value)}</dd></div>)}</dl>
+    <h3>验收配置</h3>
+    {thresholds.length ? <dl>{thresholds.map((threshold) => <div key={threshold.label}><dt>{threshold.label}</dt><dd>{percent(threshold.value)}</dd></div>)}</dl> : <p>未设置验收门槛。</p>}
+    <h3>验收结果</h3>
+    {checks.length ? <ul className="training-acceptance-checks">{checks.map((check, index) => <li key={`${check.scope}-${check.class_name}-${check.metric}-${index}`} className={check.passed ? "training-accepted" : "training-rejected"}><strong>{check.scope === "class" ? `${check.class_name} ` : "总体 "}{check.metric}</strong><span>门槛 {percent(check.threshold)} · 实际 {percent(check.actual)} · {checkReason(check)}</span></li>)}</ul> : <p>此任务没有逐项验收记录。</p>}
+  </div>;
+}
+
+export function TrainingJobDetail({ jobId, onClone, onClose, supportedConfigVersion = 1 }: { jobId: number; onClone?: (id: number) => void; onClose: () => void; supportedConfigVersion?: number }) {
   const query = useQuery({ queryKey: ["admin", "training-jobs", jobId], queryFn: () => trainingApi.detail(jobId) });
   const logUrl = query.data?.log_url ?? "";
   const log = useQuery({ queryKey: ["admin", "training-jobs", jobId, "log", logUrl], queryFn: () => trainingApi.log(logUrl), enabled: Boolean(logUrl) });
   return <ModalDialog title={`训练任务 #${jobId}`} onClose={onClose} className="training-detail-dialog">
     {query.isLoading ? <LoadingPanel label="正在加载训练详情" /> : query.isError || !query.data ? <ErrorPanel message="无法读取训练详情" onRetry={() => void query.refetch()} /> : <>
       <TrainingMetricsSummary job={query.data} />
+      <JobConfiguration job={query.data} />
       {query.data.confusion_matrix_url ? <img className="training-artifact" src={query.data.confusion_matrix_url} alt="测试集混淆矩阵" /> : null}
+      {query.data.results_curve_url ? <img className="training-artifact" src={query.data.results_curve_url} alt="训练结果曲线" /> : null}
       <h3>最近日志</h3><pre className="training-log" aria-label="最近训练日志">{query.data.recent_log ?? query.data.log ?? (log.isLoading ? "正在加载日志" : log.isError ? "日志暂时不可用" : log.data ?? "暂无日志")}</pre>
     </>}
-    <footer><button type="button" className="secondary-button" onClick={onClose}>关闭</button></footer>
+    <footer>{onClone ? <button type="button" disabled={(query.data?.config_schema_version ?? 1) > supportedConfigVersion} title={(query.data?.config_schema_version ?? 1) > supportedConfigVersion ? "配置版本过新，不能复制" : undefined} onClick={() => onClone(jobId)}>复制为新任务</button> : null}<button type="button" className="secondary-button" onClick={onClose}>关闭</button></footer>
   </ModalDialog>;
 }

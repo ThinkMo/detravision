@@ -204,7 +204,7 @@ describe("model training console", () => {
     await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
     expect(await screen.findByText("已达标")).toBeInTheDocument();
     expect(screen.getByText("91.0%")).toBeInTheDocument();
-    expect(screen.getByText("未佩戴安全帽召回率").parentElement).toHaveTextContent("93.0%");
+    expect(screen.getByText("no_helmet").parentElement).toHaveTextContent("93.0%");
     expect(screen.getByRole("progressbar", { name: "任务 7 训练进度" })).toHaveAttribute("aria-valuenow", "32");
 
     await userEvent.click(screen.getAllByRole("button", { name: "查看详情" })[0]);
@@ -293,5 +293,110 @@ describe("model training console", () => {
     await userEvent.click(await screen.findByRole("button", { name: "删除训练任务 21" }));
     await userEvent.click(within(screen.getByRole("dialog", { name: "删除训练任务" })).getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(deleted).toBe(true));
+  });
+
+  it("shows dynamic class metrics, acceptance reasons, configuration, and evaluation artifacts", async () => {
+    const job = { id: 41, executor: "local", dataset_key: "dataset:3", dataset_manifest_digest: "digest-a", dataset_classes: ["fire", "smoke"], base_model: "yolo11m.pt", imgsz: 640, epochs: 100, batch: "auto", device: "0", patience: 50, training_profile: "high_recall", config_schema_version: 1, status: "completed", current_epoch: 100, total_epochs: 100, has_last: true, has_best: true, accepted: false, map50: .72, map50_95: .41, metrics: { precision: .7, recall: .68, map50: .72, map50_95: .41, classes: { fire: { precision: .81, recall: .79, map50: .83, map50_95: .5 }, smoke: { precision: .6, recall: .55, map50: .61, map50_95: .32 } } }, error_code: null, error_message: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T01:00:00Z" };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/models") return json([]);
+      if (path === "/api/training/catalog") return json(catalog);
+      if (path === "/api/training-jobs/41") return json({ ...job, advanced_config: { optimizer: "AdamW", lr0: .002 }, acceptance_config: { schema_version: 1, overall: { map50: .7 }, classes: { fire: { recall: .85 } } }, acceptance_checks: [{ scope: "class", class_name: "fire", metric: "recall", threshold: .85, actual: null, passed: false, reason: "metric_missing" }], confusion_matrix_url: "/api/training-jobs/41/artifacts/confusion_matrix", results_curve_url: "/api/training-jobs/41/artifacts/results_curve", recent_log: "done" });
+      if (path.startsWith("/api/training-jobs")) return json({ items: [job], total: 1, page: 1, page_size: 20 });
+      throw new Error(`Unexpected request ${path}`);
+    }));
+    renderPage();
+    await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
+    await userEvent.click(await screen.findByRole("button", { name: "查看详情" }));
+    const detail = await screen.findByRole("dialog", { name: "训练任务 #41" });
+    expect(within(detail).getByRole("columnheader", { name: "类别" })).toBeInTheDocument();
+    expect(within(detail).getByText("fire")).toBeInTheDocument();
+    expect(within(detail).getByText("基础模型").parentElement).toHaveTextContent("yolo11m.pt");
+    expect(within(detail).getByText("lr0").parentElement).toHaveTextContent("0.002");
+    expect(within(detail).getByText("总体 map50").parentElement).toHaveTextContent("70.0%");
+    expect(within(detail).getByText(/指标缺失/)).toBeInTheDocument();
+    expect(within(detail).getByRole("img", { name: "测试集混淆矩阵" })).toBeInTheDocument();
+    expect(within(detail).getByRole("img", { name: "训练结果曲线" })).toBeInTheDocument();
+  });
+
+  it("keeps jobs from a future configuration schema read-only", async () => {
+    const job = { id: 43, executor: "local", dataset_key: "dataset:3", dataset_manifest_digest: "digest-a", base_model: "yolo11m.pt", imgsz: 640, epochs: 100, batch: "auto", device: "0", patience: 50, training_profile: "balanced", config_schema_version: 2, status: "failed", current_epoch: 30, total_epochs: 100, has_last: true, has_best: false, accepted: false, metrics: null, error_code: "training_failed", error_message: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T01:00:00Z" };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/models") return json([]);
+      if (path === "/api/training/catalog") return json(catalog);
+      if (path.startsWith("/api/training-jobs")) return json({ items: [job], total: 1, page: 1, page_size: 20 });
+      throw new Error(`Unexpected request ${path}`);
+    }));
+    renderPage();
+    await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
+    expect(await screen.findByRole("button", { name: "复制任务 43" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("配置版本 v2 高于当前支持的 v1，仅可查看");
+    expect(screen.getByRole("button", { name: "恢复任务 43" })).toBeDisabled();
+  });
+
+  it("opens an advanced dialog prefilled from a safe clone template", async () => {
+    const job = { id: 42, executor: "local", dataset_key: "dataset:3", dataset_manifest_digest: "digest-a", base_model: "yolo11m.pt", imgsz: 640, epochs: 150, batch: "auto", device: "0", patience: 75, training_profile: "high_recall", status: "completed", current_epoch: 150, total_epochs: 150, has_last: true, has_best: true, accepted: true, metrics: null, error_code: null, error_message: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T01:00:00Z" };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/models") return json([]);
+      if (path === "/api/training/catalog") return json(catalog);
+      if (path === "/api/training-jobs/42/clone-template") return json({ dataset_key: "dataset:3", executor: "local", base_model: "yolo11m.pt", imgsz: 640, epochs: 150, batch: "auto", device: "0", patience: 75, mode: "advanced", profile: "high_recall", advanced_config: { optimizer: "AdamW", lr0: .002, close_mosaic: 10, cache: "false" }, acceptance_config: { schema_version: 1, overall: { map50: .6 }, classes: {} } });
+      if (path.startsWith("/api/training-jobs")) return json({ items: [job], total: 1, page: 1, page_size: 20 });
+      throw new Error(`Unexpected request ${path}`);
+    }));
+    renderPage();
+    await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
+    await userEvent.click(await screen.findByRole("button", { name: "复制任务 42" }));
+    const dialog = await screen.findByRole("dialog", { name: "新建本地训练" });
+    expect(within(dialog).getByRole("tab", { name: "高级模式" })).toHaveAttribute("aria-selected", "true");
+    expect(within(dialog).getByLabelText("训练预设")).toHaveValue("high_recall");
+    expect(within(dialog).getByLabelText("初始学习率")).toHaveValue(.002);
+    expect(within(dialog).getByLabelText("总体 mAP50")).toHaveValue(.6);
+  });
+
+  it("compares two to four jobs from the same dataset snapshot", async () => {
+    const base = { executor: "local", dataset_key: "dataset:3", dataset_manifest_digest: "digest-a", dataset_classes: ["fire"], base_model: "yolo11m.pt", imgsz: 640, epochs: 100, batch: "auto", device: "0", patience: 50, training_profile: "balanced", status: "completed", current_epoch: 100, total_epochs: 100, has_last: true, has_best: true, accepted: true, error_code: null, error_message: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T01:00:00Z" };
+    const jobs = [{ ...base, id: 51, map50: .71, metrics: { classes: { fire: { precision: .7, recall: .75, map50: .71, map50_95: .4 } } } }, { ...base, id: 52, training_profile: "high_recall", map50: .76, metrics: { classes: { fire: { precision: .72, recall: .82, map50: .76, map50_95: .45 } } } }];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/models") return json([]);
+      if (path === "/api/training/catalog") return json(catalog);
+      if (path === "/api/training-jobs/51") return json({ ...jobs[0], advanced_config: { lr0: .01 }, acceptance_config: { schema_version: 1, overall: { map50: .5 }, classes: {} } });
+      if (path === "/api/training-jobs/52") return json({ ...jobs[1], advanced_config: { lr0: .001 }, acceptance_config: { schema_version: 1, overall: { map50: .5 }, classes: { fire: { recall: .8 } } } });
+      if (path.startsWith("/api/training-jobs")) return json({ items: jobs, total: 2, page: 1, page_size: 20 });
+      throw new Error(`Unexpected request ${path}`);
+    }));
+    renderPage();
+    await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
+    await userEvent.click(await screen.findByLabelText("选择任务 51"));
+    await userEvent.click(await screen.findByLabelText("选择任务 52"));
+    await userEvent.click(screen.getByRole("button", { name: "对比所选任务" }));
+    const comparison = await screen.findByRole("dialog", { name: "训练实验对比" });
+    expect(within(comparison).getByRole("columnheader", { name: "任务 #51" })).toBeInTheDocument();
+    expect(within(comparison).getByRole("columnheader", { name: "任务 #52" })).toBeInTheDocument();
+    expect(within(comparison).getByText("fire 召回率")).toBeInTheDocument();
+    expect(within(comparison).getByText("82.0%")).toBeInTheDocument();
+    expect(within(comparison).getByText("任务状态")).toBeInTheDocument();
+    expect(within(comparison).getByText("验收 总体 map50")).toBeInTheDocument();
+  });
+
+  it("rejects comparison across different dataset snapshots with an accessible error", async () => {
+    const base = { executor: "local", dataset_key: "dataset:3", base_model: "yolo11m.pt", imgsz: 640, epochs: 100, batch: "auto", device: "0", patience: 50, status: "completed", current_epoch: 100, total_epochs: 100, has_last: true, has_best: true, accepted: true, metrics: null, error_code: null, error_message: null, created_at: "2026-08-29T00:00:00Z", updated_at: "2026-08-29T01:00:00Z" };
+    const jobs = [{ ...base, id: 61, dataset_manifest_digest: "digest-a" }, { ...base, id: 62, dataset_manifest_digest: "digest-b" }];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/models") return json([]);
+      if (path === "/api/training/catalog") return json(catalog);
+      if (path.startsWith("/api/training-jobs")) return json({ items: jobs, total: 2, page: 1, page_size: 20 });
+      throw new Error(`Unexpected request ${path}`);
+    }));
+    renderPage();
+    await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
+    await userEvent.click(await screen.findByLabelText("选择任务 61"));
+    await userEvent.click(await screen.findByLabelText("选择任务 62"));
+    await userEvent.click(screen.getByRole("button", { name: "对比所选任务" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("训练集版本不同");
+    expect(screen.queryByRole("dialog", { name: "训练实验对比" })).not.toBeInTheDocument();
   });
 });

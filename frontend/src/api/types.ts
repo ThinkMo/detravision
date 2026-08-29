@@ -136,6 +136,16 @@ export interface TrainingAcceptanceTemplate {
   config: TrainingAcceptanceConfig;
 }
 
+export interface TrainingAcceptanceCheck {
+  scope: "overall" | "class";
+  class_name: string | null;
+  metric: TrainingAcceptanceMetric;
+  threshold: number;
+  actual: number | null;
+  passed: boolean;
+  reason: "threshold_met" | "threshold_not_met" | "metric_missing" | "metric_invalid" | string;
+}
+
 export interface TrainingCatalog {
   models: Array<{ id: string; series: string; size: string; available: boolean }>;
   executors: Array<{ id: "local" | "remote"; enabled: boolean }>;
@@ -218,6 +228,9 @@ export interface TrainingJob {
   patience: number;
   dataset_key?: string;
   dataset_classes?: string[];
+  dataset_manifest_digest?: string | null;
+  config_schema_version?: number;
+  training_profile?: TrainingProfile;
   status: TrainingStatus;
   current_epoch: number;
   total_epochs: number;
@@ -248,6 +261,10 @@ export interface TrainingJobDetail extends TrainingJob {
   confusion_matrix_url?: string | null;
   log_url?: string | null;
   registered_model_id?: number | null;
+  advanced_config?: TrainingAdvancedConfig | null;
+  acceptance_config?: TrainingAcceptanceConfig | null;
+  acceptance_checks?: TrainingAcceptanceCheck[] | null;
+  results_curve_url?: string | null;
 }
 
 export interface TrainingJobPage {

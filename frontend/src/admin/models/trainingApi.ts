@@ -29,6 +29,7 @@ export const trainingApi = {
   catalog: () => api.request<TrainingCatalog>("/api/training/catalog"),
   list: () => api.request<TrainingJobPage>("/api/training-jobs"),
   detail: (id: number) => api.request<TrainingJobDetail>(`/api/training-jobs/${id}`),
+  cloneTemplate: (id: number) => api.request<TrainingJobCreate>(`/api/training-jobs/${id}/clone-template`),
   log: (url: string) => api.requestText(url),
   datasetRoots: () => api.request<{ items: Array<{ alias: string }> }>("/api/training/dataset-roots"),
   datasetDirectories: (rootAlias: string, path: string) => api.request<{ items: Array<{ name: string; path: string }> }>(`/api/training/dataset-directories?root_alias=${encodeURIComponent(rootAlias)}&path=${encodeURIComponent(path)}`),

@@ -102,6 +102,22 @@
 .training-config-summary dt { color: var(--color-text-muted); font-size: .75rem; }
 .training-config-summary dd { margin: .18rem 0 0; font-weight: 700; }
 .training-form__status { color: var(--color-text-muted); font-size: .82rem; }
+.training-job-selector { display: flex; align-items: center; }
+.training-job-selector input { width: 1.05rem; height: 1.05rem; accent-color: var(--color-safe); }
+.training-comparison-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: .75rem; }
+.training-comparison-toolbar span { color: var(--color-text-muted); font-size: .82rem; }
+.training-comparison-dialog { width: min(94vw, 76rem); max-height: 90vh; overflow: auto; }
+.training-comparison-table th:first-child { position: sticky; left: 0; z-index: 1; background: #f7f9f8; }
+.training-detail-config { display: grid; gap: .7rem; }
+.training-detail-config h3 { margin: .3rem 0 0; }
+.training-detail-config dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .55rem; margin: 0; }
+.training-detail-config dl div { padding: .55rem; border-radius: var(--radius-sm); background: #f7f9f8; }
+.training-detail-config dt { color: var(--color-text-muted); font-size: .72rem; }
+.training-detail-config dd { margin: .2rem 0 0; font-weight: 700; word-break: break-word; }
+.training-acceptance-checks { display: grid; gap: .45rem; margin: 0; padding: 0; list-style: none; }
+.training-acceptance-checks li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .55rem .65rem; border-radius: var(--radius-sm); background: #f7f9f8; }
+.training-acceptance-checks span { color: var(--color-text-muted); font-size: .78rem; }
+.training-schema-warning { margin: 0; padding: .65rem .75rem; border: 1px solid #f0c36a; border-radius: .55rem; background: #fff8e5; color: #76520a; }
 .training-detail-dialog { width: min(92vw, 60rem); max-height: 90vh; overflow: auto; }
 .training-log { max-height: 18rem; overflow: auto; padding: .8rem; color: #d9f3ec; border-radius: var(--radius-sm); background: #102421; white-space: pre-wrap; word-break: break-word; }
 .training-artifact { display: block; max-width: 100%; border-radius: var(--radius-sm); }

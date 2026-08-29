@@ -37,10 +37,11 @@ export function ModelsPage() {
   const client = useQueryClient();
   const [tab, setTab] = useState<"models" | "datasets" | "training">("models");
   const [showTraining, setShowTraining] = useState(false);
+  const [trainingInitial, setTrainingInitial] = useState<TrainingJobCreate | null>(null);
   const [message, setMessage] = useState("");
   const [annotating, setAnnotating] = useState<TrainingDataset | null>(null);
   const catalog = useQuery({ queryKey: ["admin", "training", "catalog"], queryFn: trainingApi.catalog, enabled: tab === "training" });
-  const createTraining = useMutation({ mutationFn: (value: TrainingJobCreate) => trainingApi.create(value), onSuccess: () => { setShowTraining(false); setMessage("训练任务已加入队列"); void client.invalidateQueries({ queryKey: ["admin", "training-jobs"] }); } });
+  const createTraining = useMutation({ mutationFn: (value: TrainingJobCreate) => trainingApi.create(value), onSuccess: () => { setShowTraining(false); setTrainingInitial(null); setMessage("训练任务已加入队列"); void client.invalidateQueries({ queryKey: ["admin", "training-jobs"] }); } });
   const hasDataset = Boolean(catalog.data?.datasets.some((dataset) => dataset.available));
   const hasModel = Boolean(catalog.data?.models.some((model) => model.available));
 
@@ -56,11 +57,11 @@ export function ModelsPage() {
     {tab === "training" ? catalog.isLoading ? <LoadingPanel label="正在加载训练配置" /> : catalog.isError || !catalog.data ? <ErrorPanel message="无法读取训练配置" onRetry={() => void catalog.refetch()} /> : <>
       <div className="admin-subheading">
         <div><h2>训练任务</h2><small>创建、查看并管理本地模型训练</small></div>
-        <button type="button" disabled={!hasDataset || !hasModel} onClick={() => { createTraining.reset(); setShowTraining(true); }}>新建训练</button>
+        <button type="button" disabled={!hasDataset || !hasModel} onClick={() => { createTraining.reset(); setTrainingInitial(null); setShowTraining(true); }}>新建训练</button>
       </div>
       <AdminNotice message={message || (!hasDataset ? "请先定义一个可用的服务器训练集" : !hasModel ? "请先准备基础模型权重" : "")} error={!hasDataset || !hasModel} />
-      <TrainingJobsPanel onRegistered={() => void client.invalidateQueries({ queryKey: ["admin", "models"] })} />
-      {showTraining ? <TrainingJobDialog catalog={catalog.data} pending={createTraining.isPending} error={createTraining.isError ? errorMessage(createTraining.error, "创建训练任务失败") : ""} onClose={() => setShowTraining(false)} onSubmit={(value) => createTraining.mutate(value)} /> : null}
+      <TrainingJobsPanel supportedConfigVersion={catalog.data.config_schema_version ?? 1} onRegistered={() => void client.invalidateQueries({ queryKey: ["admin", "models"] })} onClone={(value) => { createTraining.reset(); setTrainingInitial(value); setShowTraining(true); }} />
+      {showTraining ? <TrainingJobDialog catalog={catalog.data} initialRequest={trainingInitial} pending={createTraining.isPending} error={createTraining.isError ? errorMessage(createTraining.error, "创建训练任务失败") : ""} onClose={() => { setShowTraining(false); setTrainingInitial(null); }} onSubmit={(value) => createTraining.mutate(value)} /> : null}
     </> : null}
   </section>;
 }
