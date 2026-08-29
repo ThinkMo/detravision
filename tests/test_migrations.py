@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from io import StringIO
@@ -196,9 +197,95 @@ def test_training_job_uses_portable_text_status_and_metrics():
     """Catches dialect-specific enum or JSON types that break SQLite/MySQL parity."""
     assert isinstance(TrainingJob.__table__.c.status.type, Text)
     assert isinstance(TrainingJob.__table__.c.metrics_json.type, Text)
+    assert isinstance(TrainingJob.__table__.c.advanced_config.type, Text)
+    assert isinstance(TrainingJob.__table__.c.acceptance_config.type, Text)
     assert isinstance(ModelVersion.__table__.c.metrics_json.type, Text)
     assert ModelVersion.__table__.c.training_job_id.nullable is True
     assert TrainingScheduler.__table__.c.id.primary_key is True
+
+
+def test_advanced_training_migration_backfills_immutable_snapshots(tmp_path):
+    """Catches historical jobs becoming unreadable after snapshots become non-null."""
+    url = "sqlite:///" + (tmp_path / "advanced-training.db").as_posix()
+    config = alembic_config(url)
+    command.upgrade(config, "0008")
+    with create_engine(url).begin() as connection:
+        connection.execute(text(
+            "INSERT INTO user (username, password_hash, role, enabled, must_change_password) "
+            "VALUES ('legacy-admin', 'unused', 'admin', 1, 0)"
+        ))
+        connection.execute(text(
+            "INSERT INTO training_job "
+            "(created_by, executor, base_model, dataset_key, epochs, imgsz, batch, "
+            "device, patience, total_epochs, run_key, idempotency_key) VALUES "
+            "(1, 'local', 'yolo11n.pt', 'safety', 3, 640, '4', '0', 2, 3, "
+            "'legacy-run', 'legacy-request')"
+        ))
+
+    command.upgrade(config, "0009")
+
+    engine = create_engine(url)
+    columns = {
+        column["name"]: column for column in inspect(engine).get_columns("training_job")
+    }
+    assert {
+        "config_schema_version", "training_profile", "advanced_config",
+        "acceptance_config",
+    } <= columns.keys()
+    assert all(
+        columns[name]["nullable"] is False
+        for name in (
+            "config_schema_version", "training_profile", "advanced_config",
+            "acceptance_config",
+        )
+    )
+    with engine.connect() as connection:
+        row = connection.execute(text(
+            "SELECT config_schema_version, training_profile, advanced_config, "
+            "acceptance_config FROM training_job WHERE run_key = 'legacy-run'"
+        )).mappings().one()
+    assert row["config_schema_version"] == 1
+    assert row["training_profile"] == "legacy"
+    advanced_config = json.loads(row["advanced_config"])
+    assert advanced_config["cache"] == "false"
+    assert advanced_config["close_mosaic"] == 3
+    assert row["acceptance_config"] == (
+        '{"classes":{"no_helmet":{"precision":0.85,"recall":0.9}},'
+        '"overall":{"map50":0.85},"schema_version":1}'
+    )
+
+
+def test_advanced_training_migration_downgrades_and_reupgrades(tmp_path):
+    """Catches snapshot columns making the SQLite migration chain one-way."""
+    url = "sqlite:///" + (tmp_path / "advanced-training-roundtrip.db").as_posix()
+    config = alembic_config(url)
+    command.upgrade(config, "0009")
+    command.downgrade(config, "0008")
+    assert "advanced_config" not in {
+        column["name"] for column in inspect(create_engine(url)).get_columns("training_job")
+    }
+
+    command.upgrade(config, "0009")
+    assert "advanced_config" in {
+        column["name"] for column in inspect(create_engine(url)).get_columns("training_job")
+    }
+
+
+def test_mysql_advanced_training_migration_is_offline_portable():
+    """Catches SQLite-only snapshot DDL or MySQL-incompatible JSON storage."""
+    output = StringIO()
+    config = alembic_config(
+        "mysql+pymysql://safety:safety@127.0.0.1/safety_test?charset=utf8mb4"
+    )
+    config.output_buffer = output
+
+    command.upgrade(config, "0009", sql=True)
+
+    sql = output.getvalue()
+    assert "config_schema_version INTEGER NOT NULL" in sql
+    assert "training_profile VARCHAR(30) NOT NULL" in sql
+    assert "advanced_config TEXT NOT NULL" in sql
+    assert "acceptance_config TEXT NOT NULL" in sql
 
 
 def test_training_dataset_migration_adds_definition_and_job_reference(tmp_path):
@@ -415,7 +502,7 @@ def test_legacy_sqlite_is_stamped_then_upgraded(legacy_database_url):
     run_migrations(legacy_database_url)
 
     with create_engine(legacy_database_url).connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0008"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0009"
         event_columns = {column["name"] for column in inspect(connection).get_columns("detection_event")}
     assert {"ack_by", "ack_user_id"} <= event_columns
 

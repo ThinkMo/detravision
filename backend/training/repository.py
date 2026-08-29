@@ -9,7 +9,8 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from backend.db.models import TrainingJob, TrainingScheduler
+from backend.db.models import TrainingDataset, TrainingJob, TrainingScheduler
+from training.configuration import normalize_acceptance_config, resolve_training_config
 
 
 ACTIVE_STATUSES = ("running", "evaluating", "stopping")
@@ -43,7 +44,29 @@ def _decode_classes(value: str | None) -> list[str]:
     return decoded
 
 
-def training_job_dict(row: TrainingJob) -> dict[str, Any]:
+def _decode_snapshot(value: str) -> dict[str, Any]:
+    decoded = json.loads(value)
+    if not isinstance(decoded, dict):
+        raise ValueError("training snapshot must be a JSON object")
+    return decoded
+
+
+def _serialize_snapshot(value: Mapping[str, Any], *, name: str) -> str:
+    try:
+        return json.dumps(
+            dict(value),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a JSON-serializable object") from exc
+
+
+def training_job_dict(
+    row: TrainingJob, *, dataset_manifest_digest: str | None = None
+) -> dict[str, Any]:
     """Return a JSON-ready training record without server-local paths."""
     return {
         "id": row.id,
@@ -52,12 +75,17 @@ def training_job_dict(row: TrainingJob) -> dict[str, Any]:
         "base_model": row.base_model,
         "dataset_key": row.dataset_key,
         "dataset_classes": _decode_classes(row.dataset_classes),
+        "dataset_manifest_digest": dataset_manifest_digest,
         "training_dataset_id": row.training_dataset_id,
         "epochs": row.epochs,
         "imgsz": row.imgsz,
         "batch": row.batch,
         "device": row.device,
         "patience": row.patience,
+        "config_schema_version": row.config_schema_version,
+        "training_profile": row.training_profile,
+        "advanced_config": _decode_snapshot(row.advanced_config),
+        "acceptance_config": _decode_snapshot(row.acceptance_config),
         "status": row.status,
         "current_epoch": row.current_epoch,
         "total_epochs": row.total_epochs,
@@ -102,6 +130,20 @@ class TrainingRepository:
     def create_job(self, values: Mapping[str, Any]) -> dict[str, Any]:
         now = self._now()
         idempotency_key = str(values["idempotency_key"])
+        epochs = int(values["epochs"])
+        classes = list(values.get("dataset_classes", []))
+        default_advanced = resolve_training_config(
+            mode="basic", profile="balanced", overrides=None, epochs=epochs
+        )
+        default_acceptance = normalize_acceptance_config(
+            None,
+            classes=classes,
+            template=(
+                "safety_helmet"
+                if {"person", "helmet", "no_helmet"} <= set(classes)
+                else None
+            ),
+        )
         job = TrainingJob(
             created_by=int(values["created_by"]),
             executor=str(values["executor"]),
@@ -113,14 +155,23 @@ class TrainingRepository:
                 ensure_ascii=False,
                 separators=(",", ":"),
             ),
-            epochs=int(values["epochs"]),
+            epochs=epochs,
             imgsz=int(values["imgsz"]),
             batch=str(values["batch"]),
             device=str(values["device"]),
             patience=int(values["patience"]),
+            config_schema_version=int(values.get("config_schema_version", 1)),
+            training_profile=str(values.get("training_profile", "legacy")),
+            advanced_config=_serialize_snapshot(
+                values.get("advanced_config", default_advanced), name="advanced_config"
+            ),
+            acceptance_config=_serialize_snapshot(
+                values.get("acceptance_config", default_acceptance),
+                name="acceptance_config",
+            ),
             status="queued",
             current_epoch=0,
-            total_epochs=int(values["epochs"]),
+            total_epochs=epochs,
             stop_requested=False,
             run_key=str(values["run_key"]),
             has_best=False,
@@ -146,7 +197,19 @@ class TrainingRepository:
     def get_job(self, job_id: int) -> dict[str, Any] | None:
         with self._session_factory() as session:
             row = session.get(TrainingJob, job_id)
-            return training_job_dict(row) if row is not None else None
+            if row is None:
+                return None
+            dataset = (
+                session.get(TrainingDataset, row.training_dataset_id)
+                if row.training_dataset_id is not None
+                else None
+            )
+            return training_job_dict(
+                row,
+                dataset_manifest_digest=(
+                    dataset.manifest_digest if dataset is not None else None
+                ),
+            )
 
     def list_jobs(
         self,
@@ -170,7 +233,21 @@ class TrainingRepository:
         )
         with self._session_factory() as session:
             total = int(session.scalar(count_statement) or 0)
-            items = [training_job_dict(row) for row in session.scalars(page_statement)]
+            items = []
+            for row in session.scalars(page_statement):
+                dataset = (
+                    session.get(TrainingDataset, row.training_dataset_id)
+                    if row.training_dataset_id is not None
+                    else None
+                )
+                items.append(
+                    training_job_dict(
+                        row,
+                        dataset_manifest_digest=(
+                            dataset.manifest_digest if dataset is not None else None
+                        ),
+                    )
+                )
         return {"items": items, "total": total, "page": page, "page_size": page_size}
 
     def claim_next(self) -> dict[str, Any] | None:
@@ -375,6 +452,10 @@ class TrainingRepository:
                 "batch": source.batch,
                 "device": source.device,
                 "patience": source.patience,
+                "config_schema_version": source.config_schema_version,
+                "training_profile": source.training_profile,
+                "advanced_config": source.advanced_config,
+                "acceptance_config": source.acceptance_config,
                 "total_epochs": source.total_epochs,
                 "resume_from_id": source.id,
             }

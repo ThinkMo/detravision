@@ -234,6 +234,14 @@ class TrainingJob(Base):
     batch: Mapped[str] = mapped_column(String(20), nullable=False)
     device: Mapped[str] = mapped_column(String(20), nullable=False)
     patience: Mapped[int] = mapped_column(Integer, nullable=False)
+    config_schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1
+    )
+    training_profile: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="legacy"
+    )
+    advanced_config: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    acceptance_config: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     status: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("('queued')")
     )

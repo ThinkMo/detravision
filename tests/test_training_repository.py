@@ -59,6 +59,14 @@ def valid_job(*, created_by: int, suffix: str = "1") -> dict[str, object]:
         "patience": 2,
         "run_key": f"run-{suffix}",
         "idempotency_key": f"request-{suffix}",
+        "config_schema_version": 1,
+        "training_profile": "high_recall",
+        "advanced_config": {"optimizer": "AdamW", "lr0": 0.001},
+        "acceptance_config": {
+            "schema_version": 1,
+            "overall": {"map50": 0.5},
+            "classes": {"no_helmet": {"recall": 0.8}},
+        },
     }
 
 
@@ -113,6 +121,24 @@ def test_create_job_persists_safe_json_ready_record(training_context):
     assert "path" not in " ".join(job.keys())
     assert repository.get_job(job["id"]) == job
     assert job["dataset_classes"] == ["person", "helmet", "no_helmet"]
+    assert job["config_schema_version"] == 1
+    assert job["training_profile"] == "high_recall"
+    assert job["advanced_config"] == {"lr0": 0.001, "optimizer": "AdamW"}
+    assert job["acceptance_config"]["classes"]["no_helmet"]["recall"] == 0.8
+
+
+def test_create_job_serializes_snapshot_json_stably(training_context):
+    """Catches semantically identical snapshots producing unstable stored JSON."""
+    repository, factory, admin_id = training_context
+    request = valid_job(created_by=admin_id)
+    request["advanced_config"] = {"optimizer": "AdamW", "amp": True, "lr0": 0.001}
+
+    job = repository.create_job(request)
+
+    with factory() as session:
+        row = session.get(TrainingJob, job["id"])
+        assert row is not None
+        assert row.advanced_config == '{"amp":true,"lr0":0.001,"optimizer":"AdamW"}'
 
 
 def test_create_job_reuses_an_idempotency_key(training_context):
@@ -294,6 +320,10 @@ def test_resume_copies_configuration_and_records_lineage(training_context):
     assert resumed["resume_from_id"] == original["id"]
     assert resumed["status"] == "queued"
     assert resumed["base_model"] == original["base_model"]
+    assert resumed["config_schema_version"] == original["config_schema_version"]
+    assert resumed["training_profile"] == original["training_profile"]
+    assert resumed["advanced_config"] == original["advanced_config"]
+    assert resumed["acceptance_config"] == original["acceptance_config"]
     assert repository.get_job(original["id"])["status"] == "stopped"
 
 
