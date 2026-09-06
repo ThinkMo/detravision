@@ -147,6 +147,7 @@ export interface TrainingAcceptanceCheck {
 }
 
 export interface TrainingCatalog {
+  scheduler_state?: "healthy" | "unavailable" | "disabled" | "unknown";
   models: Array<{ id: string; series: string; size: string; available: boolean }>;
   executors: Array<{ id: "local" | "remote"; enabled: boolean }>;
   dataset: { id: string; available: boolean; has_test_split: boolean; classes: string[] };
@@ -235,6 +236,8 @@ export interface TrainingJob {
   current_epoch: number;
   total_epochs: number;
   progress?: number;
+  runtime_state?: "waiting" | "healthy" | "heartbeat_delayed" | "disconnected" | TrainingStatus;
+  recovery_hint?: "wait_for_recovery" | "check_worker" | "resume_from_last" | null;
   stop_requested?: boolean;
   has_best: boolean;
   has_last: boolean;
@@ -272,6 +275,7 @@ export interface TrainingJobPage {
   total: number;
   page: number;
   page_size: number;
+  scheduler_state?: "healthy" | "unavailable" | "disabled" | "unknown";
 }
 
 export interface TrainingJobCreate {

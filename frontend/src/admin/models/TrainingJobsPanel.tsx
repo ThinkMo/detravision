@@ -59,6 +59,8 @@ export function TrainingJobsPanel({ onRegistered, onClone, supportedConfigVersio
         <div className="training-progress"><progress aria-label={`任务 ${job.id} 训练进度`} value={current} max={maximum} aria-valuemin={0} aria-valuemax={maximum} aria-valuenow={current} /><span>{job.current_epoch}/{job.total_epochs}（{progress}%）</span></div>
         <TrainingMetricsSummary job={job} />
         {futureConfig ? <p className="training-schema-warning" role="status">配置版本 v{job.config_schema_version} 高于当前支持的 v{supportedConfigVersion}，仅可查看</p> : null}
+        {job.runtime_state === "heartbeat_delayed" ? <p className="training-schema-warning" role="status">训练进程心跳延迟，请检查主机负载。</p> : null}
+        {job.runtime_state === "disconnected" ? <p className="training-error" role="alert">训练进程已失联，调度器将在宽限期后安全中断任务。</p> : null}
         {job.error_code || job.error_message ? <p className="training-error">{trainingErrorMessage(job.error_code, job.error_message)}</p> : null}
         <footer>
           <button type="button" className="table-action" onClick={() => setDetailId(job.id)}>查看详情</button>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, Query, Request, status
@@ -111,6 +112,7 @@ def _public_job(job: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
         if result.get("total_epochs")
         else 0.0
     )
+    result["runtime_state"], result["recovery_hint"] = _runtime_state(job)
     if detail:
         result.update({key: job.get(key) for key in _DETAIL_JOB_FIELDS})
         metrics = job.get("metrics")
@@ -125,6 +127,38 @@ def _public_job(job: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
             f"{base}/results_curve" if result.get("has_metrics") else None
         )
     return result
+
+
+def _runtime_state(job: dict[str, Any]) -> tuple[str, str | None]:
+    status_value = str(job.get("status") or "")
+    if status_value not in {"queued", "running", "evaluating", "stopping"}:
+        hint = "resume_from_last" if status_value in {"failed", "interrupted"} and job.get("has_last") else None
+        return status_value or "unknown", hint
+    if status_value == "queued":
+        return "waiting", None
+    heartbeat = job.get("heartbeat_at")
+    if not isinstance(heartbeat, datetime):
+        return "disconnected", "wait_for_recovery"
+    if heartbeat.tzinfo is None:
+        heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+    age = max(0.0, (datetime.now(timezone.utc) - heartbeat).total_seconds())
+    if age > 30:
+        return "disconnected", "wait_for_recovery"
+    if age > 10:
+        return "heartbeat_delayed", "check_worker"
+    return "healthy", None
+
+
+def _scheduler_state(request: Request) -> str:
+    if not request.app.state.settings.training_enabled:
+        return "disabled"
+    repository = getattr(request.app.state, "training_repository", None)
+    if repository is None:
+        return "unknown"
+    try:
+        return str(repository.scheduler_state())
+    except Exception:
+        return "unavailable"
 
 
 def _record(
@@ -173,9 +207,11 @@ def get_training_catalog(
     request: Request,
     _user: AuthenticatedUser = Depends(audited_admin("read", "training_catalog")),
 ) -> dict[str, Any]:
-    return training_catalog(
+    result = training_catalog(
         request.app.state.settings, _dataset_service(request)
     )
+    result["scheduler_state"] = _scheduler_state(request)
+    return result
 
 
 def _dataset_error(error: DatasetServiceError) -> JSONResponse:
@@ -463,6 +499,7 @@ def list_training_jobs(
     )
     return {
         **result,
+        "scheduler_state": _scheduler_state(request),
         "items": [_public_job(job) for job in result["items"]],
     }
 

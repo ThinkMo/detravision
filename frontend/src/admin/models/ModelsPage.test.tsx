@@ -9,6 +9,7 @@ import { trainingErrorMessage } from "./trainingApi";
 const json = (value: unknown, status = 200) => Response.json(value, { status });
 
 const catalog = {
+  scheduler_state: "healthy",
   models: ["11", "26"].flatMap((series) => ["n", "s", "m", "l", "x"].map((size) => ({ id: `yolo${series}${size}.pt`, series, size, available: series === "11" && ["n", "m"].includes(size) }))),
   executors: [{ id: "local", enabled: true }, { id: "remote", enabled: false }],
   dataset: { id: "configured", available: true, has_test_split: true, classes: ["helmet", "no_helmet"] },
@@ -53,6 +54,19 @@ afterEach(() => {
 });
 
 describe("model training console", () => {
+  it("shows a scheduler warning when no worker owns the training queue", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === "/api/models") return json([]);
+      if (path === "/api/training/catalog") return json({ ...catalog, scheduler_state: "unavailable" });
+      if (path.startsWith("/api/training-jobs")) return json({ items: [], total: 0, page: 1, page_size: 20, scheduler_state: "unavailable" });
+      throw new Error(`Unexpected request ${path}`);
+    }));
+
+    renderPage();
+    await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
+    expect(await screen.findByText(/调度服务当前未运行/)).toBeInTheDocument();
+  });
   it("maps stable training failures to Chinese guidance", () => {
     expect(trainingErrorMessage("weights_unavailable")).toContain("基础模型");
     expect(trainingErrorMessage("dataset_invalid")).toContain("训练集");

@@ -176,6 +176,9 @@ def _app(tmp_path: Path, *, role: str = "admin") -> tuple[FastAPI, FakeTrainingS
     app.include_router(router)
     app.state.settings = settings
     app.state.training_service = service
+    app.state.training_repository = type(
+        "FakeTrainingRepository", (), {"scheduler_state": lambda self: "healthy"}
+    )()
     app.state.training_storage = storage
     app.state.training_dataset_service = FakeDatasetService()
     app.state.audit_service = audit
@@ -193,9 +196,12 @@ def test_training_catalog_and_job_dtos_hide_server_fields(tmp_path: Path) -> Non
         detail = client.get("/api/training-jobs/1")
 
     assert catalog.status_code == 200
+    assert catalog.json()["scheduler_state"] == "healthy"
     assert len(catalog.json()["models"]) == 10
     assert catalog.json()["executors"][-1] == {"id": "remote", "enabled": False}
     assert listed.status_code == detail.status_code == 200
+    assert listed.json()["scheduler_state"] == "healthy"
+    assert listed.json()["items"][0]["runtime_state"] == "completed"
     serialized = listed.text + detail.text
     for forbidden in ("run_key", "pid", "idempotency_key", "best_sha256", str(tmp_path)):
         assert forbidden not in serialized

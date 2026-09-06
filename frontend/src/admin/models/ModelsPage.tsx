@@ -59,6 +59,7 @@ export function ModelsPage() {
         <div><h2>训练任务</h2><small>创建、查看并管理本地模型训练</small></div>
         <button type="button" disabled={!hasDataset || !hasModel} onClick={() => { createTraining.reset(); setTrainingInitial(null); setShowTraining(true); }}>新建训练</button>
       </div>
+      {catalog.data.scheduler_state === "unavailable" || catalog.data.scheduler_state === "unknown" ? <AdminNotice message="训练调度服务当前未运行；任务仍可创建并排队，服务恢复后会自动处理。" error /> : null}
       <AdminNotice message={message || (!hasDataset ? "请先定义一个可用的服务器训练集" : !hasModel ? "请先准备基础模型权重" : "")} error={!hasDataset || !hasModel} />
       <TrainingJobsPanel supportedConfigVersion={catalog.data.config_schema_version ?? 1} onRegistered={() => void client.invalidateQueries({ queryKey: ["admin", "models"] })} onClone={(value) => { createTraining.reset(); setTrainingInitial(value); setShowTraining(true); }} />
       {showTraining ? <TrainingJobDialog catalog={catalog.data} initialRequest={trainingInitial} pending={createTraining.isPending} error={createTraining.isError ? errorMessage(createTraining.error, "创建训练任务失败") : ""} onClose={() => { setShowTraining(false); setTrainingInitial(null); }} onSubmit={(value) => createTraining.mutate(value)} /> : null}
