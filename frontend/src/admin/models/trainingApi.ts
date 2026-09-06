@@ -1,5 +1,5 @@
 import { api } from "../../api/client";
-import type { AnnotationBoxInput, DatasetValidationReport, ModelVersion, TrainingCatalog, TrainingDataset, TrainingDatasetImage, TrainingDatasetImageDetail, TrainingDatasetImagePage, TrainingDatasetInput, TrainingJob, TrainingJobCreate, TrainingJobDetail, TrainingJobPage } from "../../api/types";
+import type { AnnotationBoxInput, DatasetValidationReport, ModelVersion, TrainingCatalog, TrainingDataset, TrainingDatasetImage, TrainingDatasetImageDetail, TrainingDatasetImagePage, TrainingDatasetInput, TrainingEffectAnalysis, TrainingJob, TrainingJobCreate, TrainingJobDetail, TrainingJobPage } from "../../api/types";
 
 function idempotencyKey() {
   return globalThis.crypto.randomUUID();
@@ -31,6 +31,7 @@ export const trainingApi = {
   detail: (id: number) => api.request<TrainingJobDetail>(`/api/training-jobs/${id}`),
   cloneTemplate: (id: number) => api.request<TrainingJobCreate>(`/api/training-jobs/${id}/clone-template`),
   log: (url: string) => api.requestText(url),
+  analysis: (url: string) => api.request<TrainingEffectAnalysis>(url),
   datasetRoots: () => api.request<{ items: Array<{ alias: string }> }>("/api/training/dataset-roots"),
   datasetDirectories: (rootAlias: string, path: string) => api.request<{ items: Array<{ name: string; path: string }> }>(`/api/training/dataset-directories?root_alias=${encodeURIComponent(rootAlias)}&path=${encodeURIComponent(path)}`),
   datasets: () => api.request<{ items: TrainingDataset[] }>("/api/training/datasets"),

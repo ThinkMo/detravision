@@ -170,6 +170,12 @@ def _app(tmp_path: Path, *, role: str = "admin") -> tuple[FastAPI, FakeTrainingS
     )
     storage.resolve_artifact(run_key, "confusion_matrix").write_bytes(b"png")
     storage.resolve_artifact(run_key, "results_curve").write_bytes(b"curve")
+    storage.resolve_artifact(run_key, "analysis").write_text(
+        '{"schema_version":1,"classes":{"helmet":{"recommended_confidence":0.72,"best_f1":0.88,"false_positives":2,"false_negatives":3}}}',
+        encoding="utf-8",
+    )
+    for kind in ("pr_curve", "f1_curve", "precision_curve", "recall_curve"):
+        storage.resolve_artifact(run_key, kind).write_bytes(b"curve")
     service = FakeTrainingService(_job(run_key))
     audit = FakeAudit()
     app = FastAPI()
@@ -207,6 +213,8 @@ def test_training_catalog_and_job_dtos_hide_server_fields(tmp_path: Path) -> Non
         assert forbidden not in serialized
     assert detail.json()["confusion_matrix_url"].endswith("/artifacts/confusion_matrix")
     assert detail.json()["results_curve_url"].endswith("/artifacts/results_curve")
+    assert detail.json()["analysis_url"].endswith("/artifacts/analysis")
+    assert set(detail.json()["evaluation_curve_urls"]) == {"pr", "f1", "precision", "recall"}
     assert detail.json()["log_url"].endswith("/artifacts/log")
 
 
@@ -330,6 +338,7 @@ def test_training_artifacts_are_allowlisted_and_logs_are_scrubbed(tmp_path: Path
         log = client.get("/api/training-jobs/1/artifacts/log")
         image = client.get("/api/training-jobs/1/artifacts/confusion_matrix")
         curve = client.get("/api/training-jobs/1/artifacts/results_curve")
+        analysis = client.get("/api/training-jobs/1/artifacts/analysis")
         rejected = client.get("/api/training-jobs/1/artifacts/best")
 
     assert log.status_code == 200
@@ -339,6 +348,9 @@ def test_training_artifacts_are_allowlisted_and_logs_are_scrubbed(tmp_path: Path
     assert image.headers["content-type"] == "image/png"
     assert curve.status_code == 200
     assert curve.headers["content-type"] == "image/png"
+    assert analysis.status_code == 200
+    assert analysis.headers["content-type"] == "application/json"
+    assert analysis.json()["classes"]["helmet"]["false_negatives"] == 3
     assert rejected.status_code == 404
 
 

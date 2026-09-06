@@ -268,6 +268,20 @@ export interface TrainingJobDetail extends TrainingJob {
   acceptance_config?: TrainingAcceptanceConfig | null;
   acceptance_checks?: TrainingAcceptanceCheck[] | null;
   results_curve_url?: string | null;
+  analysis_url?: string | null;
+  evaluation_curve_urls?: Partial<Record<"pr" | "f1" | "precision" | "recall", string>>;
+}
+
+export interface TrainingClassAnalysis {
+  recommended_confidence: number | null;
+  best_f1: number | null;
+  false_positives: number | null;
+  false_negatives: number | null;
+}
+
+export interface TrainingEffectAnalysis {
+  schema_version: number;
+  classes: Record<string, TrainingClassAnalysis>;
 }
 
 export interface TrainingJobPage {

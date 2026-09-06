@@ -71,7 +71,10 @@ _SAFE_JOB_FIELDS = (
     "resume_from_id", "created_at", "updated_at",
 )
 _DETAIL_JOB_FIELDS = ("advanced_config", "acceptance_config", "acceptance_checks")
-_PUBLIC_ARTIFACTS = frozenset({"log", "confusion_matrix", "results_curve"})
+_PUBLIC_ARTIFACTS = frozenset({
+    "log", "analysis", "confusion_matrix", "results_curve", "pr_curve",
+    "f1_curve", "precision_curve", "recall_curve",
+})
 
 
 def _service(request: Request) -> TrainingService:
@@ -125,6 +128,17 @@ def _public_job(job: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
         )
         result["results_curve_url"] = (
             f"{base}/results_curve" if result.get("has_metrics") else None
+        )
+        result["analysis_url"] = f"{base}/analysis" if result.get("has_metrics") else None
+        result["evaluation_curve_urls"] = (
+            {
+                "pr": f"{base}/pr_curve",
+                "f1": f"{base}/f1_curve",
+                "precision": f"{base}/precision_curve",
+                "recall": f"{base}/recall_curve",
+            }
+            if result.get("has_metrics")
+            else {}
         )
     return result
 
@@ -640,8 +654,9 @@ def get_training_artifact(
         return _error(exc)
     except (OSError, ValueError):
         return JSONResponse(status_code=404, content={"code": "artifact_not_found", "message": "The artifact was not found."})
+    media_type = "application/json" if kind == "analysis" else "image/png"
     return FileResponse(
         path,
-        media_type="image/png",
+        media_type=media_type,
         headers={"Content-Disposition": "inline", "X-Content-Type-Options": "nosniff"},
     )

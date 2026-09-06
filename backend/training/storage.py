@@ -18,6 +18,11 @@ ARTIFACTS = {
     "last": "weights/last.pt",
     "confusion_matrix": "confusion_matrix.png",
     "results_curve": "results.png",
+    "analysis": "analysis.json",
+    "pr_curve": "PR_curve.png",
+    "f1_curve": "F1_curve.png",
+    "precision_curve": "P_curve.png",
+    "recall_curve": "R_curve.png",
     "effective_config": "effective_config.json",
 }
 

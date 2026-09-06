@@ -32,6 +32,12 @@ def metric_fixture(
 ):
     return SimpleNamespace(
         names={0: "person", 1: "helmet", 2: "no_helmet"},
+        curves_results=[
+            ([0.0, 0.5, 0.9], [[0.1, 0.8, 0.6], [0.2, 0.7, 0.5], [0.1, 0.6, 0.9]], "Confidence", "F1-Confidence(B)"),
+        ],
+        confusion_matrix=SimpleNamespace(
+            matrix=[[8, 1, 0, 2], [1, 9, 0, 1], [0, 0, 7, 3], [2, 1, 4, 0]]
+        ),
         box=SimpleNamespace(
             mp=0.87,
             mr=0.91,
@@ -546,6 +552,8 @@ class FakeYOLO:
         save_dir.mkdir(parents=True, exist_ok=True)
         if self.fail_stage != "confusion_missing":
             (save_dir / "confusion_matrix.png").write_bytes(b"confusion matrix")
+        for name in ("PR_curve.png", "F1_curve.png", "P_curve.png", "R_curve.png"):
+            (save_dir / name).write_bytes(name.encode("ascii"))
         metrics = metric_fixture()
         if self.fail_stage != "no_metrics_save_dir":
             metrics.save_dir = save_dir
@@ -637,6 +645,11 @@ def test_worker_dispatches_training_progress_test_evaluation_and_digest(
         Path(str(payload["run_dir"])) / "confusion_matrix.png"
     ).read_bytes() == b"confusion matrix"
     assert (Path(str(payload["run_dir"])) / "results.png").read_bytes() == b"results curve"
+    analysis = json.loads((Path(str(payload["run_dir"])) / "analysis.json").read_text(encoding="utf-8"))
+    assert analysis["classes"]["no_helmet"]["recommended_confidence"] == 0.9
+    assert analysis["classes"]["no_helmet"]["false_negatives"] == 4
+    for name in ("PR_curve.png", "F1_curve.png", "P_curve.png", "R_curve.png"):
+        assert (Path(str(payload["run_dir"])) / name).is_file()
     assert os.environ["YOLO_CONFIG_DIR"] == str(tmp_path / "data")
     assert os.environ["MPLCONFIGDIR"] == str(tmp_path / "data" / "matplotlib")
 

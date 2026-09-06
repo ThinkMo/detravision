@@ -315,7 +315,8 @@ describe("model training console", () => {
       const path = String(input);
       if (path === "/api/models") return json([]);
       if (path === "/api/training/catalog") return json(catalog);
-      if (path === "/api/training-jobs/41") return json({ ...job, advanced_config: { optimizer: "AdamW", lr0: .002 }, acceptance_config: { schema_version: 1, overall: { map50: .7 }, classes: { fire: { recall: .85 } } }, acceptance_checks: [{ scope: "class", class_name: "fire", metric: "recall", threshold: .85, actual: null, passed: false, reason: "metric_missing" }], confusion_matrix_url: "/api/training-jobs/41/artifacts/confusion_matrix", results_curve_url: "/api/training-jobs/41/artifacts/results_curve", recent_log: "done" });
+      if (path === "/api/training-jobs/41") return json({ ...job, advanced_config: { optimizer: "AdamW", lr0: .002 }, acceptance_config: { schema_version: 1, overall: { map50: .7 }, classes: { fire: { recall: .85 } } }, acceptance_checks: [{ scope: "class", class_name: "fire", metric: "recall", threshold: .85, actual: null, passed: false, reason: "metric_missing" }], confusion_matrix_url: "/api/training-jobs/41/artifacts/confusion_matrix", results_curve_url: "/api/training-jobs/41/artifacts/results_curve", analysis_url: "/api/training-jobs/41/artifacts/analysis", evaluation_curve_urls: { f1: "/api/training-jobs/41/artifacts/f1_curve" }, recent_log: "done" });
+      if (path === "/api/training-jobs/41/artifacts/analysis") return json({ schema_version: 1, classes: { fire: { recommended_confidence: .72, best_f1: .88, false_positives: 2, false_negatives: 3 } } });
       if (path.startsWith("/api/training-jobs")) return json({ items: [job], total: 1, page: 1, page_size: 20 });
       throw new Error(`Unexpected request ${path}`);
     }));
@@ -323,14 +324,18 @@ describe("model training console", () => {
     await userEvent.click(await screen.findByRole("tab", { name: "训练任务" }));
     await userEvent.click(await screen.findByRole("button", { name: "查看详情" }));
     const detail = await screen.findByRole("dialog", { name: "训练任务 #41" });
-    expect(within(detail).getByRole("columnheader", { name: "类别" })).toBeInTheDocument();
-    expect(within(detail).getByText("fire")).toBeInTheDocument();
+    expect(within(detail).getAllByRole("columnheader", { name: "类别" })).toHaveLength(2);
+    expect(within(detail).getAllByText("fire")).toHaveLength(2);
     expect(within(detail).getByText("基础模型").parentElement).toHaveTextContent("yolo11m.pt");
     expect(within(detail).getByText("lr0").parentElement).toHaveTextContent("0.002");
     expect(within(detail).getByText("总体 map50").parentElement).toHaveTextContent("70.0%");
     expect(within(detail).getByText(/指标缺失/)).toBeInTheDocument();
     expect(within(detail).getByRole("img", { name: "测试集混淆矩阵" })).toBeInTheDocument();
     expect(within(detail).getByRole("img", { name: "训练结果曲线" })).toBeInTheDocument();
+    const analysisTable = within(detail).getByRole("table", { name: "置信度与误检漏检分析" });
+    expect(within(analysisTable).getByText("72.0%")).toBeInTheDocument();
+    expect(within(analysisTable).getByRole("columnheader", { name: "误检" })).toBeInTheDocument();
+    expect(within(detail).getByRole("img", { name: "F1 评估曲线" })).toBeInTheDocument();
   });
 
   it("keeps jobs from a future configuration schema read-only", async () => {

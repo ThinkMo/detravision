@@ -50,13 +50,17 @@ function JobConfiguration({ job }: { job: TrainingJobDetailType }) {
 export function TrainingJobDetail({ jobId, onClone, onClose, supportedConfigVersion = 1 }: { jobId: number; onClone?: (id: number) => void; onClose: () => void; supportedConfigVersion?: number }) {
   const query = useQuery({ queryKey: ["admin", "training-jobs", jobId], queryFn: () => trainingApi.detail(jobId) });
   const logUrl = query.data?.log_url ?? "";
+  const analysisUrl = query.data?.analysis_url ?? "";
   const log = useQuery({ queryKey: ["admin", "training-jobs", jobId, "log", logUrl], queryFn: () => trainingApi.log(logUrl), enabled: Boolean(logUrl) });
+  const analysis = useQuery({ queryKey: ["admin", "training-jobs", jobId, "analysis", analysisUrl], queryFn: () => trainingApi.analysis(analysisUrl), enabled: Boolean(analysisUrl) });
   return <ModalDialog title={`训练任务 #${jobId}`} onClose={onClose} className="training-detail-dialog">
     {query.isLoading ? <LoadingPanel label="正在加载训练详情" /> : query.isError || !query.data ? <ErrorPanel message="无法读取训练详情" onRetry={() => void query.refetch()} /> : <>
       <TrainingMetricsSummary job={query.data} />
       <JobConfiguration job={query.data} />
+      {analysis.data && Object.keys(analysis.data.classes).length ? <div className="training-effect-analysis"><h3>置信度与误检漏检分析</h3><div className="admin-table-wrap"><table className="admin-table" aria-label="置信度与误检漏检分析"><thead><tr><th>类别</th><th>建议置信度</th><th>最佳 F1</th><th>误检</th><th>漏检</th></tr></thead><tbody>{Object.entries(analysis.data.classes).map(([name, value]) => <tr key={name}><td>{name}</td><td>{percent(value.recommended_confidence)}</td><td>{percent(value.best_f1)}</td><td>{value.false_positives ?? "—"}</td><td>{value.false_negatives ?? "—"}</td></tr>)}</tbody></table></div><p className="training-form__status">建议置信度来自测试集 F1 峰值；上线阈值仍应结合漏检成本调整。</p></div> : null}
       {query.data.confusion_matrix_url ? <img className="training-artifact" src={query.data.confusion_matrix_url} alt="测试集混淆矩阵" /> : null}
       {query.data.results_curve_url ? <img className="training-artifact" src={query.data.results_curve_url} alt="训练结果曲线" /> : null}
+      {Object.entries(query.data.evaluation_curve_urls ?? {}).map(([kind, url]) => url ? <img key={kind} className="training-artifact" src={url} alt={`${kind.toUpperCase()} 评估曲线`} /> : null)}
       <h3>最近日志</h3><pre className="training-log" aria-label="最近训练日志">{query.data.recent_log ?? query.data.log ?? (log.isLoading ? "正在加载日志" : log.isError ? "日志暂时不可用" : log.data ?? "暂无日志")}</pre>
     </>}
     <footer>{onClone ? <button type="button" disabled={(query.data?.config_schema_version ?? 1) > supportedConfigVersion} title={(query.data?.config_schema_version ?? 1) > supportedConfigVersion ? "配置版本过新，不能复制" : undefined} onClick={() => onClone(jobId)}>复制为新任务</button> : null}<button type="button" className="secondary-button" onClick={onClose}>关闭</button></footer>

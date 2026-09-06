@@ -18,6 +18,7 @@ from training.contracts import (
     TrainingResult,
     atomic_write_json,
     extract_metrics,
+    extract_evaluation_analysis,
 )
 from training.configuration import evaluate_acceptance
 from training.train import PROJECT_ROOT, configure_runtime, resolve_device
@@ -143,6 +144,22 @@ def _copy_confusion_matrix(raw_metrics: object, run_dir: Path) -> None:
         raise FileNotFoundError("confusion matrix unavailable")
     destination = _contained(run_dir / "confusion_matrix.png", run_dir)
     shutil.copy2(source, destination)
+
+
+def _copy_evaluation_curves(raw_metrics: object, run_dir: Path) -> None:
+    expected = _contained(run_dir / "test", run_dir)
+    raw_save_dir = getattr(raw_metrics, "save_dir", None)
+    save_dir = (
+        _contained(Path(raw_save_dir), run_dir)
+        if raw_save_dir is not None
+        else expected
+    )
+    if save_dir != expected:
+        raise ValueError("evaluation output directory is not fixed")
+    for filename in ("PR_curve.png", "F1_curve.png", "P_curve.png", "R_curve.png"):
+        source = _contained(save_dir / filename, save_dir)
+        if source.is_file():
+            shutil.copy2(source, _contained(run_dir / filename, run_dir))
 
 
 def _base_model_reference(
@@ -299,6 +316,10 @@ def _execute_manifest(
             )
             metrics = extract_metrics(raw_metrics)
             _copy_confusion_matrix(raw_metrics, run_dir)
+            atomic_write_json(
+                run_dir / "analysis.json", extract_evaluation_analysis(raw_metrics)
+            )
+            _copy_evaluation_curves(raw_metrics, run_dir)
         except Exception as exc:
             code = "cuda_oom" if _is_cuda_oom(exc) else "evaluation_failed"
             raise WorkerFailure(code, "evaluate") from exc

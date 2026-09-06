@@ -493,6 +493,84 @@ def extract_metrics(metrics: object) -> dict[str, Any]:
     return {**overall, "classes": classes}
 
 
+def _plain_sequence(value: object) -> list[object] | None:
+    if hasattr(value, "tolist"):
+        try:
+            value = value.tolist()
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return list(value)
+    return None
+
+
+def extract_evaluation_analysis(metrics: object) -> dict[str, object]:
+    """Extract optional, JSON-safe operating-point and confusion diagnostics."""
+    names = getattr(metrics, "names", {})
+    if isinstance(names, Mapping):
+        ordered = [(int(class_id), str(name)) for class_id, name in names.items()]
+    else:
+        raw_names = _plain_sequence(names) or []
+        ordered = list(enumerate(str(name) for name in raw_names))
+    ordered.sort(key=lambda item: item[0])
+    rows: dict[str, dict[str, float | int | None]] = {
+        name: {
+            "recommended_confidence": None,
+            "best_f1": None,
+            "false_positives": None,
+            "false_negatives": None,
+        }
+        for _, name in ordered
+    }
+
+    for curve in _plain_sequence(getattr(metrics, "curves_results", None)) or []:
+        parts = _plain_sequence(curve)
+        if not parts or len(parts) < 4 or "f1" not in str(parts[3]).casefold():
+            continue
+        confidence = _plain_sequence(parts[0])
+        class_curves = _plain_sequence(parts[1])
+        if not confidence or not class_curves:
+            continue
+        for result_index, (_class_id, name) in enumerate(ordered):
+            if result_index >= len(class_curves):
+                continue
+            values = _plain_sequence(class_curves[result_index])
+            if not values or len(values) != len(confidence):
+                continue
+            try:
+                numeric = [float(value) for value in values]
+                best_index = max(range(len(numeric)), key=numeric.__getitem__)
+                best_f1 = _probability(numeric[best_index], "best f1")
+                threshold = _probability(confidence[best_index], "confidence")
+            except (TypeError, ValueError, OverflowError):
+                continue
+            rows[name]["recommended_confidence"] = round(threshold, 6)
+            rows[name]["best_f1"] = round(best_f1, 6)
+        break
+
+    confusion = getattr(getattr(metrics, "confusion_matrix", None), "matrix", None)
+    matrix = _plain_sequence(confusion)
+    if matrix:
+        plain_rows = [_plain_sequence(row) for row in matrix]
+        class_count = len(ordered)
+        if len(plain_rows) >= class_count and all(
+            row is not None and len(row) >= class_count for row in plain_rows
+        ):
+            try:
+                numeric_matrix = [
+                    [float(value) for value in row] for row in plain_rows if row is not None
+                ]
+                for result_index, (_class_id, name) in enumerate(ordered):
+                    diagonal = numeric_matrix[result_index][result_index]
+                    false_positives = sum(numeric_matrix[result_index]) - diagonal
+                    false_negatives = sum(row[result_index] for row in numeric_matrix) - diagonal
+                    rows[name]["false_positives"] = max(0, int(round(false_positives)))
+                    rows[name]["false_negatives"] = max(0, int(round(false_negatives)))
+            except (TypeError, ValueError, OverflowError, IndexError):
+                pass
+    return {"schema_version": 1, "classes": rows}
+
+
 def _legacy_acceptance_config() -> dict[str, object]:
     return {
         "schema_version": CONFIG_SCHEMA_VERSION,
