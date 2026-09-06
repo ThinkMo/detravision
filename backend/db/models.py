@@ -250,6 +250,11 @@ class TrainingJob(Base):
     )
     total_epochs: Mapped[int] = mapped_column(Integer, nullable=False)
     pid: Mapped[int | None] = mapped_column(Integer)
+    owner_id: Mapped[str | None] = mapped_column(String(64))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    execution_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     started_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
     finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
     stop_requested: Mapped[bool] = mapped_column(
@@ -289,6 +294,12 @@ class TrainingScheduler(Base):
     __table_args__ = (CheckConstraint("id = 1", name="singleton"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str | None] = mapped_column(String(64))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    lease_expires_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
 
 
 class SiteSettings(Base):

@@ -288,6 +288,50 @@ def test_mysql_advanced_training_migration_is_offline_portable():
     assert "acceptance_config TEXT NOT NULL" in sql
 
 
+def test_training_scheduler_lease_migration_adds_safe_ownership_columns(tmp_path):
+    """Catches deployments without durable scheduler and task ownership state."""
+    url = "sqlite:///" + (tmp_path / "training-lease.db").as_posix()
+    run_migrations(url)
+    inspector = inspect(create_engine(url))
+
+    scheduler = {column["name"]: column for column in inspector.get_columns("training_scheduler")}
+    jobs = {column["name"]: column for column in inspector.get_columns("training_job")}
+    assert {"owner_id", "heartbeat_at", "lease_expires_at", "revision"} <= scheduler.keys()
+    assert {"owner_id", "heartbeat_at", "execution_generation"} <= jobs.keys()
+    assert scheduler["revision"]["nullable"] is False
+    assert jobs["execution_generation"]["nullable"] is False
+
+    with create_engine(url).connect() as connection:
+        row = connection.execute(text(
+            "SELECT owner_id, heartbeat_at, lease_expires_at, revision "
+            "FROM training_scheduler WHERE id = 1"
+        )).mappings().one()
+    assert dict(row) == {
+        "owner_id": None,
+        "heartbeat_at": None,
+        "lease_expires_at": None,
+        "revision": 0,
+    }
+
+
+def test_mysql_training_scheduler_lease_migration_is_offline_portable():
+    """Catches lease DDL that cannot be applied to production MySQL."""
+    output = StringIO()
+    config = alembic_config(
+        "mysql+pymysql://safety:safety@127.0.0.1/safety_test?charset=utf8mb4"
+    )
+    config.output_buffer = output
+
+    command.upgrade(config, "head", sql=True)
+
+    sql = output.getvalue()
+    assert "owner_id VARCHAR(64)" in sql
+    assert "lease_expires_at DATETIME" in sql
+    assert "heartbeat_at DATETIME" in sql
+    assert "revision INTEGER" in sql
+    assert "execution_generation INTEGER" in sql
+
+
 def test_training_dataset_migration_adds_definition_and_job_reference(tmp_path):
     """Catches losing selectable dataset definitions or job provenance."""
     url = "sqlite:///" + (tmp_path / "training-dataset-schema.db").as_posix()
