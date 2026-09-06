@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import delete, func, select, update
@@ -90,6 +90,9 @@ def training_job_dict(
         "current_epoch": row.current_epoch,
         "total_epochs": row.total_epochs,
         "pid": row.pid,
+        "owner_id": row.owner_id,
+        "heartbeat_at": row.heartbeat_at,
+        "execution_generation": row.execution_generation,
         "started_at": row.started_at,
         "finished_at": row.finished_at,
         "stop_requested": row.stop_requested,
@@ -250,18 +253,82 @@ class TrainingRepository:
                 )
         return {"items": items, "total": total, "page": page, "page_size": page_size}
 
-    def claim_next(self) -> dict[str, Any] | None:
+    def acquire_lease(self, owner_id: str, lease_seconds: float) -> int | None:
+        if not owner_id or lease_seconds <= 0:
+            raise ValueError("owner_id and lease_seconds are required")
         now = self._now()
         with self._session_factory.begin() as session:
             self._lock_sqlite_writer(session)
-            if session.bind is not None and session.bind.dialect.name == "mysql":
-                scheduler_id = session.scalar(
-                    select(TrainingScheduler.id)
-                    .where(TrainingScheduler.id == 1)
-                    .with_for_update()
+            row = self._locked_scheduler(session)
+            if (
+                row.owner_id is not None
+                and row.owner_id != owner_id
+                and row.lease_expires_at is not None
+                and row.lease_expires_at > now
+            ):
+                return None
+            if row.owner_id != owner_id:
+                row.revision += 1
+            row.owner_id = owner_id
+            row.heartbeat_at = now
+            row.lease_expires_at = now + timedelta(seconds=lease_seconds)
+            session.flush()
+            return row.revision
+
+    def renew_lease(self, owner_id: str, revision: int, lease_seconds: float) -> bool:
+        now = self._now()
+        with self._session_factory.begin() as session:
+            changed = session.execute(
+                update(TrainingScheduler)
+                .where(
+                    TrainingScheduler.id == 1,
+                    TrainingScheduler.owner_id == owner_id,
+                    TrainingScheduler.revision == revision,
+                    TrainingScheduler.lease_expires_at >= now,
                 )
-                if scheduler_id is None:
-                    raise RuntimeError("training scheduler lock row is missing")
+                .values(
+                    heartbeat_at=now,
+                    lease_expires_at=now + timedelta(seconds=lease_seconds),
+                )
+            )
+            return changed.rowcount == 1
+
+    def release_lease(self, owner_id: str, revision: int) -> bool:
+        with self._session_factory.begin() as session:
+            changed = session.execute(
+                update(TrainingScheduler)
+                .where(
+                    TrainingScheduler.id == 1,
+                    TrainingScheduler.owner_id == owner_id,
+                    TrainingScheduler.revision == revision,
+                )
+                .values(owner_id=None, heartbeat_at=None, lease_expires_at=None)
+            )
+            return changed.rowcount == 1
+
+    def scheduler_state(self) -> str:
+        now = self._now()
+        with self._session_factory() as session:
+            row = session.get(TrainingScheduler, 1)
+            if row is None or row.owner_id is None or row.lease_expires_at is None:
+                return "unavailable"
+            return "healthy" if row.lease_expires_at >= now else "unavailable"
+
+    def claim_next(
+        self, owner_id: str | None = None, lease_revision: int | None = None
+    ) -> dict[str, Any] | None:
+        now = self._now()
+        with self._session_factory.begin() as session:
+            self._lock_sqlite_writer(session)
+            scheduler = self._locked_scheduler(session)
+            if owner_id is not None and (
+                lease_revision is None
+                or scheduler.owner_id != owner_id
+                or scheduler.revision != lease_revision
+                or scheduler.lease_expires_at is None
+                or scheduler.lease_expires_at < now
+            ):
+                return None
             active_statement = (
                 select(TrainingJob.id)
                 .where(TrainingJob.status.in_(ACTIVE_STATUSES))
@@ -285,7 +352,14 @@ class TrainingRepository:
             claimed = session.execute(
                 update(TrainingJob)
                 .where(TrainingJob.id == job_id, TrainingJob.status == "queued")
-                .values(status="running", started_at=now, updated_at=now)
+                .values(
+                    status="running",
+                    started_at=now,
+                    updated_at=now,
+                    owner_id=owner_id,
+                    heartbeat_at=now if owner_id is not None else None,
+                    execution_generation=TrainingJob.execution_generation + 1,
+                )
             )
             if claimed.rowcount != 1:
                 return None
@@ -301,6 +375,8 @@ class TrainingRepository:
         metrics: Mapping[str, Any] | None = None,
         status: str | None = None,
         pid: int | None = None,
+        owner_id: str | None = None,
+        execution_generation: int | None = None,
     ) -> dict[str, Any] | None:
         if current_epoch < 0:
             raise ValueError("current_epoch must be nonnegative")
@@ -309,6 +385,8 @@ class TrainingRepository:
             "current_epoch": current_epoch,
             "updated_at": self._now(),
         }
+        if owner_id is not None:
+            values["heartbeat_at"] = values["updated_at"]
         if metrics_json is not None:
             values.update(self._metric_values(metrics, metrics_json))
         if status is not None:
@@ -323,15 +401,17 @@ class TrainingRepository:
                 allowed_statuses = ("running",)
             elif status == "evaluating":
                 allowed_statuses = ("running", "evaluating")
-            changed = session.execute(
-                update(TrainingJob)
-                .where(
-                    TrainingJob.id == job_id,
-                    TrainingJob.status.in_(allowed_statuses),
-                    TrainingJob.current_epoch <= current_epoch,
-                )
-                .values(**values)
-            )
+            conditions = [
+                TrainingJob.id == job_id,
+                TrainingJob.status.in_(allowed_statuses),
+                TrainingJob.current_epoch <= current_epoch,
+            ]
+            if owner_id is not None:
+                conditions.extend((
+                    TrainingJob.owner_id == owner_id,
+                    TrainingJob.execution_generation == execution_generation,
+                ))
+            changed = session.execute(update(TrainingJob).where(*conditions).values(**values))
             if changed.rowcount != 1:
                 existing = session.get(TrainingJob, job_id)
                 return training_job_dict(existing) if existing is not None else None
@@ -372,6 +452,8 @@ class TrainingRepository:
         best_sha256: str | None = None,
         error_code: str | None = None,
         error_message: str | None = None,
+        owner_id: str | None = None,
+        execution_generation: int | None = None,
     ) -> dict[str, Any] | None:
         if status not in TERMINAL_STATUSES:
             raise ValueError("invalid terminal training status")
@@ -386,25 +468,65 @@ class TrainingRepository:
             "best_sha256": best_sha256,
             "error_code": error_code,
             "error_message": error_message,
+            "owner_id": None,
+            "heartbeat_at": None,
         }
         if metrics_json is not None:
             values.update(self._metric_values(metrics, metrics_json))
         allowed_statuses = ("queued",) if status == "cancelled" else ACTIVE_STATUSES
         with self._session_factory.begin() as session:
-            changed = session.execute(
-                update(TrainingJob)
-                .where(
-                    TrainingJob.id == job_id,
-                    TrainingJob.status.in_(allowed_statuses),
-                )
-                .values(**values)
-            )
+            conditions = [
+                TrainingJob.id == job_id,
+                TrainingJob.status.in_(allowed_statuses),
+            ]
+            if owner_id is not None:
+                conditions.extend((
+                    TrainingJob.owner_id == owner_id,
+                    TrainingJob.execution_generation == execution_generation,
+                ))
+            changed = session.execute(update(TrainingJob).where(*conditions).values(**values))
             if changed.rowcount != 1:
                 existing = session.get(TrainingJob, job_id)
                 return training_job_dict(existing) if existing is not None else None
             row = session.get(TrainingJob, job_id)
             assert row is not None
             return training_job_dict(row)
+
+    def recover_expired(
+        self, owner_id: str, lease_revision: int, grace_seconds: float
+    ) -> int:
+        if grace_seconds <= 0:
+            raise ValueError("grace_seconds must be positive")
+        now = self._now()
+        cutoff = now - timedelta(seconds=grace_seconds)
+        with self._session_factory.begin() as session:
+            self._lock_sqlite_writer(session)
+            scheduler = self._locked_scheduler(session)
+            if (
+                scheduler.owner_id != owner_id
+                or scheduler.revision != lease_revision
+                or scheduler.lease_expires_at is None
+                or scheduler.lease_expires_at < now
+            ):
+                return 0
+            result = session.execute(
+                update(TrainingJob)
+                .where(
+                    TrainingJob.status.in_(ACTIVE_STATUSES),
+                    func.coalesce(TrainingJob.heartbeat_at, TrainingJob.updated_at) < cutoff,
+                )
+                .values(
+                    status="interrupted",
+                    pid=None,
+                    owner_id=None,
+                    heartbeat_at=None,
+                    finished_at=now,
+                    updated_at=now,
+                    error_code="training_heartbeat_timeout",
+                    error_message="Training heartbeat timed out; resume from the last checkpoint after review.",
+                )
+            )
+            return int(result.rowcount)
 
     def recover_interrupted(self) -> int:
         now = self._now()
@@ -479,6 +601,16 @@ class TrainingRepository:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("clock must return a timezone-aware datetime")
         return value.astimezone(timezone.utc)
+
+    @staticmethod
+    def _locked_scheduler(session: Session) -> TrainingScheduler:
+        statement = select(TrainingScheduler).where(TrainingScheduler.id == 1)
+        if session.bind is not None and session.bind.dialect.name == "mysql":
+            statement = statement.with_for_update()
+        row = session.scalar(statement)
+        if row is None:
+            raise RuntimeError("training scheduler lock row is missing")
+        return row
 
     def _insert_idempotent(
         self, job: TrainingJob, idempotency_key: str

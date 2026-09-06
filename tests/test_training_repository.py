@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import Barrier
 from types import SimpleNamespace
 
@@ -12,7 +12,7 @@ from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import Session
 
 from backend.db.migrate import run_migrations
-from backend.db.models import ModelVersion, TrainingJob, User
+from backend.db.models import ModelVersion, TrainingJob, TrainingScheduler, User
 from backend.db.repositories import Repository
 from backend.db.session import create_engine_from_url, create_session_factory
 from backend.training.repository import TrainingRepository
@@ -187,6 +187,87 @@ def test_claim_next_serializes_jobs_in_creation_order(training_context):
     assert repository.claim_next() is None
     repository.mark_terminal(first["id"], status="completed", metrics={"map50": 0.9})
     assert repository.claim_next()["id"] == second["id"]
+
+
+def test_scheduler_lease_rejects_competitors_and_stale_release(training_context):
+    repository, _factory, _admin_id = training_context
+
+    revision = repository.acquire_lease("owner-a", lease_seconds=20)
+
+    assert revision == 1
+    assert repository.acquire_lease("owner-b", lease_seconds=20) is None
+    assert repository.renew_lease("owner-a", revision, lease_seconds=20) is True
+    assert repository.release_lease("owner-a", revision + 1) is False
+    assert repository.release_lease("owner-a", revision) is True
+    assert repository.acquire_lease("owner-b", lease_seconds=20) == 2
+
+
+def test_expired_scheduler_lease_can_be_taken_over(tmp_path):
+    database_url = "sqlite:///" + (tmp_path / "lease-takeover.db").as_posix()
+    run_migrations(database_url)
+    engine = create_engine_from_url(database_url)
+    session_factory = create_session_factory(engine)
+    instant = [NOW]
+    repository = TrainingRepository(session_factory, clock=lambda: instant[0])
+    try:
+        assert repository.acquire_lease("owner-a", lease_seconds=20) == 1
+        instant[0] += timedelta(seconds=21)
+        assert repository.acquire_lease("owner-b", lease_seconds=20) == 2
+        assert repository.renew_lease("owner-a", 1, lease_seconds=20) is False
+    finally:
+        engine.dispose()
+
+
+def test_owned_claim_and_updates_reject_stale_execution(training_context):
+    repository, _factory, admin_id = training_context
+    job = repository.create_job(valid_job(created_by=admin_id, suffix="owned"))
+    revision = repository.acquire_lease("owner-a", lease_seconds=20)
+    assert revision is not None
+
+    claimed = repository.claim_next(owner_id="owner-a", lease_revision=revision)
+
+    assert claimed is not None
+    assert claimed["owner_id"] == "owner-a"
+    assert claimed["execution_generation"] == 1
+    stale = repository.update_progress(
+        job["id"], current_epoch=2, owner_id="owner-b", execution_generation=1
+    )
+    assert stale is not None
+    assert stale["current_epoch"] == 0
+    current = repository.update_progress(
+        job["id"], current_epoch=2, owner_id="owner-a", execution_generation=1
+    )
+    assert current is not None
+    assert current["current_epoch"] == 2
+    stale_terminal = repository.mark_terminal(
+        job["id"], status="failed", owner_id="owner-a", execution_generation=0
+    )
+    assert stale_terminal is not None
+    assert stale_terminal["status"] == "running"
+    completed = repository.mark_terminal(
+        job["id"], status="completed", owner_id="owner-a", execution_generation=1
+    )
+    assert completed is not None
+    assert completed["status"] == "completed"
+    assert completed["owner_id"] is None
+    assert completed["heartbeat_at"] is None
+
+
+def test_recover_expired_requires_current_lease_and_grace(training_context):
+    repository, factory, admin_id = training_context
+    job = repository.create_job(valid_job(created_by=admin_id, suffix="recover"))
+    revision = repository.acquire_lease("owner-a", lease_seconds=20)
+    assert revision is not None
+    claimed = repository.claim_next(owner_id="owner-a", lease_revision=revision)
+    assert claimed is not None
+    with factory.begin() as session:
+        row = session.get(TrainingJob, job["id"])
+        assert row is not None
+        row.heartbeat_at = NOW - timedelta(seconds=60)
+
+    assert repository.recover_expired("owner-b", revision, grace_seconds=30) == 0
+    assert repository.recover_expired("owner-a", revision, grace_seconds=30) == 1
+    assert repository.get_job(job["id"])["status"] == "interrupted"
 
 
 def test_mysql_claim_locks_the_single_scheduler_row_before_reading_jobs():

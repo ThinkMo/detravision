@@ -546,7 +546,7 @@ def test_legacy_sqlite_is_stamped_then_upgraded(legacy_database_url):
     run_migrations(legacy_database_url)
 
     with create_engine(legacy_database_url).connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0009"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0010"
         event_columns = {column["name"] for column in inspect(connection).get_columns("detection_event")}
     assert {"ack_by", "ack_user_id"} <= event_columns
 
