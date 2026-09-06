@@ -340,9 +340,9 @@ def test_idle_manager_waits_for_wake_and_shutdown_returns_promptly(manager_conte
             self.wrapped = wrapped
             self.claims = 0
 
-        def claim_next(self):
+        def claim_next(self, **kwargs):
             self.claims += 1
-            return self.wrapped.claim_next()
+            return self.wrapped.claim_next(**kwargs)
 
         def __getattr__(self, name):
             return getattr(self.wrapped, name)
@@ -365,8 +365,14 @@ def test_startup_interrupts_stale_active_job_without_signaling_stored_pid(manage
     running = repository.claim_next()
     repository.update_progress(running["id"], current_epoch=1, pid=999999)
     popen = PopenRecorder()
-    manager = LocalTrainingManager(repository, storage, popen_factory=popen)
+    manager = LocalTrainingManager(
+        repository,
+        storage,
+        popen_factory=popen,
+        recovery_grace_seconds=0.01,
+    )
 
+    time.sleep(0.02)
     manager.start()
     try:
         wait_until(lambda: repository.get_job(job["id"])["status"] == "interrupted")
@@ -411,13 +417,13 @@ def test_wake_between_empty_claim_and_condition_wait_is_not_lost(manager_context
             self.wrapped = wrapped
             self.first = True
 
-        def claim_next(self):
+        def claim_next(self, **kwargs):
             if self.first:
                 self.first = False
                 entered_claim.set()
                 assert release_claim.wait(timeout=1)
                 return None
-            return self.wrapped.claim_next()
+            return self.wrapped.claim_next(**kwargs)
 
         def __getattr__(self, name):
             return getattr(self.wrapped, name)
@@ -468,6 +474,90 @@ def test_only_one_manager_owns_run_root_and_second_takes_over_after_release(
         takeover_process.finish(1)
         second.wake()
         second.stop()
+
+
+def test_manager_stamps_owned_execution_and_releases_database_lease(manager_context):
+    repository, storage, admin_id = manager_context
+    job = queued_job(repository, storage, admin_id, "lease-owned")
+    process = FakeProcess()
+    manager = LocalTrainingManager(
+        repository,
+        storage,
+        popen_factory=PopenRecorder([process]),
+        lease_seconds=1.0,
+        heartbeat_seconds=0.05,
+        recovery_grace_seconds=1.0,
+    )
+
+    assert manager.start() is True
+    try:
+        wait_until(lambda: repository.get_job(job["id"])["owner_id"] is not None)
+        running = repository.get_job(job["id"])
+        assert running["execution_generation"] == 1
+        assert running["heartbeat_at"] is not None
+        assert repository.scheduler_state() == "healthy"
+    finally:
+        process.finish(1)
+        manager.wake()
+        assert manager.stop() is True
+    assert repository.scheduler_state() == "unavailable"
+
+
+def test_manager_cannot_start_when_database_lease_has_another_owner(manager_context):
+    repository, storage, _admin_id = manager_context
+    assert repository.acquire_lease("another-host", lease_seconds=60) == 1
+    manager = LocalTrainingManager(repository, storage)
+
+    assert manager.start() is False
+
+
+def test_manager_terminates_owned_process_after_database_lease_loss(manager_context):
+    repository, storage, admin_id = manager_context
+    job = queued_job(repository, storage, admin_id, "lease-loss")
+    process = FakeProcess()
+
+    class LeaseLosingRepository:
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
+            self.renewals = 0
+
+        def renew_lease(self, *args, **kwargs):
+            self.renewals += 1
+            if self.renewals > 1:
+                return False
+            return self.wrapped.renew_lease(*args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self.wrapped, name)
+
+    manager = LocalTrainingManager(
+        LeaseLosingRepository(repository),
+        storage,
+        popen_factory=PopenRecorder([process]),
+        monitor_interval_seconds=0.01,
+        heartbeat_seconds=0.02,
+        lease_seconds=0.1,
+        recovery_grace_seconds=0.1,
+    )
+
+    assert manager.start() is True
+    wait_until(lambda: repository.get_job(job["id"])["status"] == "running")
+    wait_until(lambda: process.terminated)
+
+    assert manager.stop() is True
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"training_heartbeat_seconds": 0},
+        {"training_heartbeat_seconds": 5, "training_lease_seconds": 14},
+        {"training_lease_seconds": 20, "training_recovery_grace_seconds": 19},
+    ],
+)
+def test_training_lease_settings_reject_unsafe_intervals(values):
+    with pytest.raises(ValueError, match="TRAINING_"):
+        Settings(**values)
 
 
 def test_worker_launch_uses_project_root_even_when_service_cwd_changes(
@@ -698,13 +788,22 @@ def test_stop_returns_false_when_scheduler_cannot_join(manager_context):
     release = Event()
 
     class BlockingRepository:
-        def claim_next(self):
+        def acquire_lease(self, owner_id, *, lease_seconds):
+            return 1
+
+        def recover_expired(self, owner_id, lease_revision, *, grace_seconds):
+            return 0
+
+        def renew_lease(self, owner_id, lease_revision, *, lease_seconds):
+            return True
+
+        def release_lease(self, owner_id, lease_revision):
+            return True
+
+        def claim_next(self, **kwargs):
             entered.set()
             release.wait(timeout=2)
             return None
-
-        def recover_interrupted(self):
-            return 0
 
     manager = LocalTrainingManager(
         BlockingRepository(),

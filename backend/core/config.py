@@ -93,6 +93,15 @@ class Settings:
     training_stop_timeout_seconds: float = float(
         os.getenv("TRAINING_STOP_TIMEOUT_SECONDS", "15")
     )
+    training_heartbeat_seconds: float = float(
+        os.getenv("TRAINING_HEARTBEAT_SECONDS", "5")
+    )
+    training_lease_seconds: float = float(
+        os.getenv("TRAINING_LEASE_SECONDS", "20")
+    )
+    training_recovery_grace_seconds: float = float(
+        os.getenv("TRAINING_RECOVERY_GRACE_SECONDS", "30")
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -116,6 +125,23 @@ class Settings:
             or self.training_stop_timeout_seconds <= 0
         ):
             raise ValueError("TRAINING_STOP_TIMEOUT_SECONDS must be positive")
+        intervals = (
+            self.training_heartbeat_seconds,
+            self.training_lease_seconds,
+            self.training_recovery_grace_seconds,
+        )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or not math.isfinite(value)
+            or value <= 0
+            for value in intervals
+        ):
+            raise ValueError("TRAINING_ lease intervals must be finite and positive")
+        if self.training_lease_seconds < 3 * self.training_heartbeat_seconds:
+            raise ValueError("TRAINING_LEASE_SECONDS must be at least three heartbeats")
+        if self.training_recovery_grace_seconds < self.training_lease_seconds:
+            raise ValueError("TRAINING_RECOVERY_GRACE_SECONDS must cover the lease")
 
     @property
     def database_path(self) -> Path:

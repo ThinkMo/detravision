@@ -105,6 +105,9 @@ def application_lifespan(app_settings: Settings):
             training_repository,
             training_storage,
             stop_timeout_seconds=app_settings.training_stop_timeout_seconds,
+            heartbeat_seconds=app_settings.training_heartbeat_seconds,
+            lease_seconds=app_settings.training_lease_seconds,
+            recovery_grace_seconds=app_settings.training_recovery_grace_seconds,
         )
         training_service = TrainingService(
             training_repository,

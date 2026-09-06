@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Callable, Protocol
@@ -81,6 +83,7 @@ class _LocalManagerLock:
 class _ActiveProcess:
     job_id: int
     run_key: str
+    execution_generation: int
     process: ProcessHandle
     log: BinaryIO
     progress_bytes: bytes | None = None
@@ -97,6 +100,9 @@ class LocalTrainingManager:
         popen_factory: Callable[..., ProcessHandle] = subprocess.Popen,
         stop_timeout_seconds: float = 15.0,
         monitor_interval_seconds: float = 0.25,
+        heartbeat_seconds: float = 5.0,
+        lease_seconds: float = 20.0,
+        recovery_grace_seconds: float = 30.0,
         join_timeout_seconds: float | None = None,
         project_root: Path = PROJECT_ROOT,
     ) -> None:
@@ -105,6 +111,9 @@ class LocalTrainingManager:
         self._popen_factory = popen_factory
         self._stop_timeout = stop_timeout_seconds
         self._monitor_interval = monitor_interval_seconds
+        self._heartbeat_seconds = heartbeat_seconds
+        self._lease_seconds = lease_seconds
+        self._recovery_grace_seconds = recovery_grace_seconds
         self._join_timeout = stop_timeout_seconds + 2.0 if join_timeout_seconds is None else join_timeout_seconds
         self._project_root = project_root.resolve()
         self._condition = threading.Condition()
@@ -115,6 +124,9 @@ class LocalTrainingManager:
         self._quarantined = False
         self._quarantine_terminal: dict[str, object] | None = None
         self._local_lock = _LocalManagerLock(storage.root)
+        self._owner_id: str | None = None
+        self._lease_revision: int | None = None
+        self._last_lease_renewal = 0.0
 
     def start(self) -> bool:
         with self._condition:
@@ -123,8 +135,21 @@ class LocalTrainingManager:
             if not self._local_lock.acquire():
                 return False
             try:
-                self._repository.recover_interrupted()
+                owner_id = secrets.token_hex(16)
+                revision = self._repository.acquire_lease(
+                    owner_id, lease_seconds=self._lease_seconds
+                )
+                if revision is None:
+                    self._local_lock.release()
+                    return False
+                self._owner_id = owner_id
+                self._lease_revision = revision
+                self._last_lease_renewal = 0.0
+                self._repository.recover_expired(
+                    owner_id, revision, grace_seconds=self._recovery_grace_seconds
+                )
             except Exception:
+                self._release_lease()
                 self._local_lock.release()
                 return False
             self._shutdown = False
@@ -163,6 +188,7 @@ class LocalTrainingManager:
             self._run()
         finally:
             if self._active is None:
+                self._release_lease()
                 self._local_lock.release()
             with self._condition:
                 self._condition.notify_all()
@@ -178,14 +204,20 @@ class LocalTrainingManager:
                 self._monitor_shutdown()
                 self._wait_for_change(observed_generation, bounded=True)
                 continue
+            if not self._maintain_lease():
+                self._isolate_after_lease_loss()
+                return
             if self._active is None:
                 try:
-                    job = self._repository.claim_next()
+                    job = self._repository.claim_next(
+                        owner_id=self._owner_id,
+                        lease_revision=self._lease_revision,
+                    )
                 except Exception:
                     self._wait_for_change(observed_generation, bounded=True)
                     continue
                 if job is None:
-                    self._wait_for_change(observed_generation, bounded=False)
+                    self._wait_for_change(observed_generation, bounded=True)
                     continue
                 self._launch(job)
                 continue
@@ -219,13 +251,18 @@ class LocalTrainingManager:
                 stdout=log, stderr=subprocess.STDOUT, shell=False,
                 cwd=str(self._project_root), env=self._child_environment(),
             )
-            active = _ActiveProcess(job_id, run_key, process, log)
+            generation = int(job.get("execution_generation", 0))
+            active = _ActiveProcess(job_id, run_key, generation, process, log)
             self._active = active
             self._quarantined = False
-            self._repository.update_progress(job_id, current_epoch=int(job.get("current_epoch", 0)), pid=process.pid)
+            self._owned_update_progress(
+                active, current_epoch=int(job.get("current_epoch", 0)), pid=process.pid
+            )
         except BaseException:
             if process is not None and log is not None:
-                active = self._active or _ActiveProcess(job_id, run_key, process, log)
+                active = self._active or _ActiveProcess(
+                    job_id, run_key, int(job.get("execution_generation", 0)), process, log
+                )
                 self._active = active
                 if not self._terminate(active):
                     self._quarantine_active(
@@ -241,6 +278,7 @@ class LocalTrainingManager:
             self._safe_mark_terminal(
                 job_id, status="failed", error_code="training_failed",
                 error_message="Training did not produce a valid model.",
+                execution_generation=int(job.get("execution_generation", 0)),
             )
 
     def _monitor_active(self) -> None:
@@ -303,8 +341,8 @@ class LocalTrainingManager:
         active.progress_bytes = payload
         if progress.total_epochs != int(job["total_epochs"]) or progress.current_epoch < int(job["current_epoch"]):
             return
-        self._repository.update_progress(
-            active.job_id, current_epoch=progress.current_epoch, metrics=progress.metrics,
+        self._owned_update_progress(
+            active, current_epoch=progress.current_epoch, metrics=progress.metrics,
             status="evaluating" if progress.current_epoch == progress.total_epochs else "running",
         )
 
@@ -355,11 +393,76 @@ class LocalTrainingManager:
             error_code="training_failed", error_message="Training did not produce a valid model.",
         )
 
-    def _safe_mark_terminal(self, job_id: int, **values: object) -> bool:
+    def _safe_mark_terminal(
+        self, job_id: int, *, execution_generation: int | None = None, **values: object
+    ) -> bool:
         try:
-            return self._repository.mark_terminal(job_id, **values) is not None
+            active = self._active
+            generation = (
+                active.execution_generation
+                if active is not None and active.job_id == job_id
+                else execution_generation
+            )
+            result = self._repository.mark_terminal(
+                job_id,
+                owner_id=self._owner_id,
+                execution_generation=generation,
+                **values,
+            )
+            return result is not None and result.get("status") == values.get("status")
         except Exception:
             return False
+
+    def _owned_update_progress(self, active: _ActiveProcess, **values: object):
+        return self._repository.update_progress(
+            active.job_id,
+            owner_id=self._owner_id,
+            execution_generation=active.execution_generation,
+            **values,
+        )
+
+    def _maintain_lease(self) -> bool:
+        owner_id, revision = self._owner_id, self._lease_revision
+        if owner_id is None or revision is None:
+            return False
+        now = time.monotonic()
+        if now - self._last_lease_renewal < self._heartbeat_seconds:
+            return True
+        if not self._repository.renew_lease(
+            owner_id, revision, lease_seconds=self._lease_seconds
+        ):
+            return False
+        self._last_lease_renewal = now
+        active = self._active
+        if active is not None:
+            current = self._repository.get_job(active.job_id)
+            if current is None:
+                return False
+            updated = self._owned_update_progress(
+                active, current_epoch=int(current.get("current_epoch", 0))
+            )
+            if updated is None or updated.get("owner_id") != owner_id:
+                return False
+        return True
+
+    def _isolate_after_lease_loss(self) -> None:
+        active = self._active
+        if active is None:
+            return
+        self._terminate(active)
+        self._close_log(active.log)
+        self._active = None
+
+    def _release_lease(self) -> None:
+        owner_id, revision = self._owner_id, self._lease_revision
+        self._owner_id = None
+        self._lease_revision = None
+        if owner_id is None or revision is None:
+            return
+        try:
+            self._repository.release_lease(owner_id, revision)
+        except Exception:
+            pass
 
     def _monitor_shutdown(self) -> None:
         active = self._active
