@@ -244,6 +244,13 @@ $env:REAL_MODEL_TEST_IMAGE_DIR = (Resolve-Path "datasets/construction-ppe/images
 | `SNAPSHOT_DIR` | `data/snapshots` | 告警抓拍目录 |
 | `MODEL_PATH` | 空 | 启动时加载的 PT/ONNX/Engine 模型 |
 | `ANNOTATION_FONT_PATH` | 空 | 可选中文 TTF/TTC 字体；未配置时自动查找常见系统中文字体，找不到则使用英文标注避免乱码 |
+| `TRAINING_ENABLED` | `true` | 是否启用本地训练调度器 |
+| `TRAINING_DATASET_ROOTS` | 空 | 可选择和标注的服务器训练集授权根目录 |
+| `TRAINING_RUN_DIR` | `data/training-runs` | 训练任务、日志、权重和评估制品目录 |
+| `TRAINING_MODEL_CACHE_DIR` | `data/training-models` | 可选基础 `.pt` 权重目录 |
+| `TRAINING_HEARTBEAT_SECONDS` | `5` | 调度器和运行任务心跳间隔 |
+| `TRAINING_LEASE_SECONDS` | `20` | 数据库调度租约时长，必须至少为心跳的 3 倍 |
+| `TRAINING_RECOVERY_GRACE_SECONDS` | `30` | 失联任务恢复宽限期，必须不小于租约时长 |
 | `BATCH_RETENTION_DAYS` | `30` | 多图任务、原图及标注结果的保留天数，必须大于 0 |
 | `BATCH_WORKER_COUNT` | `1` | 当前版本固定为 1；其他值会拒绝启动 |
 | `WORKER_COUNT` | `1` | 推理线程数；单 GPU 建议从 1 开始压测 |
@@ -265,6 +272,19 @@ $env:REAL_MODEL_TEST_IMAGE_DIR = (Resolve-Path "datasets/construction-ppe/images
 
 仓库已保留 MySQL 连接代码，以及受 `TEST_MYSQL_URL` 控制的迁移/仓储测试，但这不等于 MySQL 已经通过实机验收。本次执行只跑通了本地 SQLite；live MySQL、备份恢复和部署验收均明确延后。上线前必须在目标 MySQL 8.0.13+ 环境执行迁移、仓储、批量任务与恢复测试，不能把本地 SQLite 结果当作生产数据库验收结果。
 
+### Docker + MySQL 生产式启动
+
+容器镜像会用 Node.js 24 构建前端、安装已锁定的 Python 直接依赖，并以非 root 用户运行。应用容器启动时会先执行 Alembic 迁移，成功后才启动 Uvicorn。首次使用：
+
+```bash
+cp deploy/.env.example deploy/.env
+# 编辑 deploy/.env，替换三个密码；DATABASE_URL 中的特殊字符必须 URL 编码
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up --build -d
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
+```
+
+访问 `http://127.0.0.1:8000/api/health` 验证服务。Compose 使用 MySQL 8.4 和命名卷保存数据库、应用文件及模型仓库；`DATASET_HOST_DIR` 挂载到 `/app/datasets` 以支持人工标注，`TRAINING_MODEL_HOST_DIR` 用于放置可选基础 `.pt` 权重，因此宿主机权限必须限制给服务账户。生产 HTTPS 反向代理后应把 `COOKIE_SECURE` 设为 `true`。仓库不包含真实生产密码，也不包含 CUDA/Atlas 专用运行时镜像。
+
 ## 数据与训练
 
 ### 在管理页面选择服务器训练集
@@ -280,6 +300,8 @@ TRAINING_DATASET_ROOTS=construction=D:\datasets\construction;customer=D:\dataset
 每个分片必须同时存在对应标签目录，例如 `images/train` 对应 `labels/train`。新建训练时必须选择一个可用训练集；系统会把配置快照写入任务自己的 `dataset.yaml`，之后数据集被停用也不会改变已有任务的配置。基础模型下拉框只允许选择项目根目录或 `TRAINING_MODEL_CACHE_DIR` 中实际存在的 `.pt` 权重。
 
 训练平台支持任意类别的 YOLO 矩形框目标检测。新建任务可使用基础模式，或选择均衡、小目标、高召回、稳定微调、自定义五种高级预设，并在服务端白名单内调整学习率、增强、运行和损失权重；任务会保存不可变配置与验收快照。完成后可复制任务调整参数，并对比 2～4 个使用同一训练集发布快照的实验。Construction-PPE 的 `person`、`helmet`、`no_helmet` 只是内置安全帽模板，不是平台的类别限制。
+
+训练调度器使用数据库租约、执行代次和心跳保护任务所有权。服务异常退出后不会冒险复用旧 PID；旧任务在宽限期后标记为中断，有 `last.pt` 时可从页面创建续训任务。训练详情会展示每类别建议置信度（测试集最佳 F1 对应点）、最佳 F1、误检/漏检计数，以及 PR、F1、Precision、Recall 曲线。建议阈值用于实验起点，不等同于业务验收阈值。
 
 从原始 Construction-PPE ZIP 构建三类训练集，以及通过管理控制台或 CLI 执行冒烟训练、正式训练、停止后续训、通用测试集评估、候选模型注册和启用的完整步骤见 [训练集构建与模型训练指南](docs/training-guide.md)。
 

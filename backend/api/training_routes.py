@@ -107,7 +107,13 @@ def _error(error: TrainingServiceError) -> JSONResponse:
     )
 
 
-def _public_job(job: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
+def _public_job(
+    job: dict[str, Any],
+    *,
+    detail: bool = False,
+    heartbeat_seconds: float = 5.0,
+    recovery_grace_seconds: float = 30.0,
+) -> dict[str, Any]:
     result = {key: job.get(key) for key in _SAFE_JOB_FIELDS}
     job_id = result["id"]
     result["progress"] = (
@@ -115,7 +121,11 @@ def _public_job(job: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
         if result.get("total_epochs")
         else 0.0
     )
-    result["runtime_state"], result["recovery_hint"] = _runtime_state(job)
+    result["runtime_state"], result["recovery_hint"] = _runtime_state(
+        job,
+        heartbeat_seconds=heartbeat_seconds,
+        recovery_grace_seconds=recovery_grace_seconds,
+    )
     if detail:
         result.update({key: job.get(key) for key in _DETAIL_JOB_FIELDS})
         metrics = job.get("metrics")
@@ -143,7 +153,12 @@ def _public_job(job: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
     return result
 
 
-def _runtime_state(job: dict[str, Any]) -> tuple[str, str | None]:
+def _runtime_state(
+    job: dict[str, Any],
+    *,
+    heartbeat_seconds: float,
+    recovery_grace_seconds: float,
+) -> tuple[str, str | None]:
     status_value = str(job.get("status") or "")
     if status_value not in {"queued", "running", "evaluating", "stopping"}:
         hint = "resume_from_last" if status_value in {"failed", "interrupted"} and job.get("has_last") else None
@@ -156,11 +171,23 @@ def _runtime_state(job: dict[str, Any]) -> tuple[str, str | None]:
     if heartbeat.tzinfo is None:
         heartbeat = heartbeat.replace(tzinfo=timezone.utc)
     age = max(0.0, (datetime.now(timezone.utc) - heartbeat).total_seconds())
-    if age > 30:
+    if age > recovery_grace_seconds:
         return "disconnected", "wait_for_recovery"
-    if age > 10:
+    if age > heartbeat_seconds * 2:
         return "heartbeat_delayed", "check_worker"
     return "healthy", None
+
+
+def _public_job_for_request(
+    request: Request, job: dict[str, Any], *, detail: bool = False
+) -> dict[str, Any]:
+    settings = request.app.state.settings
+    return _public_job(
+        job,
+        detail=detail,
+        heartbeat_seconds=settings.training_heartbeat_seconds,
+        recovery_grace_seconds=settings.training_recovery_grace_seconds,
+    )
 
 
 def _scheduler_state(request: Request) -> str:
@@ -514,7 +541,7 @@ def list_training_jobs(
     return {
         **result,
         "scheduler_state": _scheduler_state(request),
-        "items": [_public_job(job) for job in result["items"]],
+        "items": [_public_job_for_request(request, job) for job in result["items"]],
     }
 
 
@@ -537,7 +564,7 @@ def create_training_job(
         _record(request, user, "training_create", None, "rejected", details={"code": exc.code})
         return _error(exc)
     _record(request, user, "training_create", job["id"], "success")
-    return _public_job(job, detail=True)
+    return _public_job_for_request(request, job, detail=True)
 
 
 @router.get("/training-jobs/{job_id}")
@@ -547,7 +574,7 @@ def get_training_job(
     _user: AuthenticatedUser = Depends(audited_admin("read", "training_job")),
 ):
     try:
-        return _public_job(_service(request).get_job(job_id), detail=True)
+        return _public_job_for_request(request, _service(request).get_job(job_id), detail=True)
     except TrainingServiceError as exc:
         return _error(exc)
 
@@ -592,7 +619,7 @@ def _mutate(
         _record(request, user, action, job_id, "rejected", details={"code": exc.code})
         return _error(exc)
     _record(request, user, action, job_id, "success")
-    return _public_job(result, detail=True) if "status" in result else result
+    return _public_job_for_request(request, result, detail=True) if "status" in result else result
 
 
 @router.post("/training-jobs/{job_id}/stop")

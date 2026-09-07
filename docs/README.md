@@ -15,6 +15,9 @@ README 和使用指南面向项目使用者；`superpowers/specs/` 与 `superpow
 - [Web 管理控制台设计](superpowers/specs/2026-08-15-web-console-design.md)
 - [安全帽违规识别体验设计](superpowers/specs/2026-08-16-helmet-focused-inference-ux-design.md)
 - [Master 目录整理设计](superpowers/specs/2026-08-16-master-directory-organization-design.md)
+- [训练调度可靠性设计](superpowers/specs/2026-09-06-training-scheduler-reliability-design.md)
+- [训练效果分析设计](superpowers/specs/2026-09-06-training-effect-analysis-design.md)
+- [工程交付加固设计](superpowers/specs/2026-09-06-delivery-hardening-design.md)
 
 ## 实施计划
 
@@ -24,3 +27,6 @@ README 和使用指南面向项目使用者；`superpowers/specs/` 与 `superpow
 - [批量图片识别实施计划](superpowers/plans/2026-08-15-batch-image-inference.md)
 - [安全帽违规识别体验实施计划](superpowers/plans/2026-08-16-helmet-focused-inference-ux.md)
 - [Master 目录整理实施计划](superpowers/plans/2026-08-16-master-directory-organization.md)
+- [训练调度可靠性实施计划](superpowers/plans/2026-09-06-training-scheduler-reliability.md)
+- [训练效果分析实施计划](superpowers/plans/2026-09-06-training-effect-analysis.md)
+- [工程交付加固实施计划](superpowers/plans/2026-09-06-delivery-hardening.md)

@@ -1,0 +1,15 @@
+.git
+.github
+.venv
+.worktrees
+data
+datasets
+runs
+model_repo
+frontend/node_modules
+frontend/dist
+**/__pycache__
+**/.pytest_cache
+*.zip
+*.pt
+.env

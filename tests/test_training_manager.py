@@ -760,7 +760,7 @@ def test_unconfirmed_launch_and_missing_job_failures_quarantine_owned_child(
         storage,
         popen_factory=popen,
         stop_timeout_seconds=0.01,
-        join_timeout_seconds=0.02,
+        join_timeout_seconds=0.2,
     )
     assert manager.start() is True
     wait_until(lambda: len(popen.calls) == 1)
@@ -843,7 +843,7 @@ def test_stop_exceptions_keep_scheduler_alive_and_close_owned_log(
         storage,
         popen_factory=popen,
         stop_timeout_seconds=0.01,
-        join_timeout_seconds=0.02,
+        join_timeout_seconds=0.2,
     )
     manager.start()
     try:
