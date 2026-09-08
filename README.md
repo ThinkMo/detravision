@@ -1,182 +1,234 @@
-# Safety Detect — 安全帽 / 明火 / 烟雾实时检测系统
+# Safety Detect — 工业安全视觉检测与训练平台
 
-基于 FastAPI、React 与 Ultralytics YOLO11 的中心化视频检测系统。系统接入多路 RTSP，按配置抽帧推理，将检测结果转换为可去重、可确认的业务事件，并通过同源管理控制台、REST、WebSocket 和飞书机器人提供能力。
+Safety Detect 是一个基于 FastAPI、React 和 Ultralytics YOLO 的集中式视觉检测系统。它可以接入多路 RTSP 视频或批量图片，识别安全帽违规、明火、烟雾等目标，生成可确认的事件，并提供模型训练、评估和版本管理能力。
 
-当前仓库已实现本地 SQLite 单机运行所需的认证后端和管理控制台。没有模型和摄像头时，页面与 API 仍可启动，实时监控会显示未启用状态。
+项目适合本地试用、算法验证和可信内网中的单机部署。没有模型或摄像头时，管理控制台和 API 仍可正常启动，方便先体验账号、配置、事件和训练集管理。
 
-## 已实现能力
+## 核心能力
 
-- 摄像头、人员、告警组、事件和模型版本 REST API
-- SQLAlchemy 仓储、Alembic 迁移和 SQLite 开发数据库
-- 本地账号、服务端会话、管理员/普通用户权限和操作审计
-- 可配置的网站名称与 Logo
-- React 管理控制台：登录、首次改密、安全态势、实时监控、事件中心及管理员配置
-- 多图识别：持久化任务、单图标注结果、历史筛选及 ZIP 下载
-- 配置收敛器：摄像头启停或参数变化后自动启停 RTSP 线程
-- 每路独立解码、全局有界帧队列、满队列丢弃最旧帧
-- Ultralytics 推理适配器；未配置模型时使用空检测器
-- ROI 过滤、连续帧确认、事件冷却去重
-- 安全帽规则按人员头部区域关联 `no_helmet`，避免整个人框 IoU 失真
-- 事件落库、抓拍保存、飞书 Webhook 通知
-- `/ws/events` 事件推送和 `/ws/live/{camera_id}` JPEG 二进制帧推送
-- CPU FP32 ONNX / GPU FP16 TensorRT 分目标导出及模型版本元数据
+- 实时检测：多路 RTSP 解码、共享推理队列、ROI、连续帧确认和事件冷却去重
+- 多图识别：一次上传最多 20 张图片，在线预览标注结果并下载单图或 ZIP
+- 事件闭环：事件查询、确认、关闭、抓拍、WebSocket 推送和飞书通知
+- 管理控制台：摄像头、人员、告警组、模型、用户、品牌和审计日志管理
+- 本地训练：任意 YOLO 矩形框类别、基础/高级预设、停止续训和实验对比
+- 训练评估：总体及分类别指标、建议置信度、误检/漏检和 PR/F1/P/R 曲线
+- 模型管理：训练候选模型注册、激活，以及 CPU ONNX / GPU TensorRT 导出
+- 安全基础：服务端会话、管理员/普通用户权限、首次强制改密和操作审计
 
-## 架构
+## 5 分钟本地试用
 
-```text
-REST 配置 ──> SQLAlchemy 数据库 ──> reconciler ──> 每路 RTSP Capture
-                                            │
-                                            v
-                                  DropOldestQueue（有界）
-                                            │
-                                            v
-                                  共享 inference workers
-                                            │
-                              ┌─────────────┼─────────────┐
-                              v             v             v
-                         规则与去重      实时 JPEG      检测事件
-                              │                           │
-                              └────────> 抓拍 / DB / 飞书 / WS
+### 1. 准备环境
+
+- Python 3.12 或更高版本
+- Node.js 24.x（必须为 `v24.*`）
+- Windows 或 Linux
+
+先确认版本：
+
+```powershell
+python --version
+node --version
 ```
 
-关键约束：
+### 2. 一键启动
 
-- 实时视频允许丢帧，不允许因消费变慢而无限积压。
-- 摄像头配置的期望状态保存在数据库，运行状态由收敛器维护。
-- `fire`、`smoke` 直接形成候选事件；`no_helmet` 必须与人员框上方 40% 的头部区域关联。
-- 候选事件默认需要 5 秒内连续命中 3 次，同摄像头同类型事件 30 秒冷却。
-- ROI 使用检测框中心点是否落入多边形判断；未配置 ROI 时视为全画面。
-
-## 目录结构
-
-```text
-backend/       # FastAPI、鉴权、数据库、实时与批量推理
-frontend/      # React/Vite 管理控制台及前端测试
-training/      # 数据转换、训练、续训、验证和模型导出 CLI
-tests/         # Python 自动化测试
-migrations/    # Alembic 数据库迁移环境和版本脚本
-deploy/        # Dockerfile 与 Compose
-docs/          # 用户指南、设计规格和实施计划
-model_repo/    # 本地导出模型落点；Git 仅保留 .gitkeep
-```
-
-本地生成目录不会进入 Git：
-
-```text
-data/                   # SQLite、上传文件及工具缓存
-datasets/               # 原始与转换后的训练集
-runs/                   # Ultralytics 训练和验证结果
-.venv/                  # Python 虚拟环境
-frontend/node_modules/  # Node.js 依赖
-frontend/dist/          # 前端生产构建，可由 npm run build 重建
-```
-
-完整文档索引见 [docs/README.md](docs/README.md)。
-
-## 快速开始
-
-### 前置环境
-
-- Python 3.12 或更高版本。
-- Node.js 24.x。前端 `package.json` 明确要求 `>=24 <25`；先运行 `node --version`，必须显示 `v24.*`。本机系统 PATH 若仍显示 `v16.*`，请安装 Node.js 24 LTS、重新打开终端，再继续执行前端命令。
-
-### 本地一键启动（推荐）
-
-Windows 在项目根目录双击 `start.cmd`，或运行：
+Windows：
 
 ```powershell
 .\start.cmd
 ```
 
-Linux 在项目根目录运行：
+Linux：
 
 ```bash
 chmod +x start.sh
 ./start.sh
 ```
 
-首次运行会自动创建 `.venv`、安装缺失的后端与前端依赖、构建前端，并在 <http://127.0.0.1:8000/> 启动同源服务。再次运行会复用已有依赖；按 `Ctrl+C` 停止。启动器会读取可选的 `.env`，但不会覆盖当前终端已经设置的环境变量。
-
-已有依赖和 `frontend/dist` 时可快速启动：
+首次运行会自动创建 `.venv`、安装缺失依赖、构建前端，并使用本地 SQLite 启动同源服务。以后已有依赖和构建产物时，可以快速启动：
 
 ```powershell
 .\start.cmd --skip-install --skip-build
 ```
 
-Linux 使用相同参数：`./start.sh --skip-install --skip-build`。完整参数、配置优先级和故障处理见 [Windows / Linux 本地一键启动](docs/local-start.md)。该脚本只用于本地 SQLite 单实例开发与验收，不替代生产 MySQL 部署流程。
+Linux 对应命令为 `./start.sh --skip-install --skip-build`。按 `Ctrl+C` 停止服务。
 
-### 手动安装
+更多端口、跳过安装和配置优先级说明见 [Windows / Linux 本地一键启动](docs/local-start.md)。
 
-创建虚拟环境并安装后端依赖：
+### 3. 打开并登录
 
-```bash
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-pip install -r requirements-dev.txt
+- 管理控制台：<http://127.0.0.1:8000/>
+- API 文档：<http://127.0.0.1:8000/docs>
+- 健康检查：<http://127.0.0.1:8000/api/health>
+
+本地数据库为空且未设置 `ADMIN_INITIAL_PASSWORD` 时，使用以下开发账号：
+
+```text
+用户名：admin
+临时密码：admin123456
 ```
 
-安装前端依赖：
+首次登录后必须立即修改密码。该默认密码只能用于本地开发；生产环境不会使用默认密码。
+
+### 4. 按顺序体验
+
+1. 登录后查看“安全态势”和各管理页面。
+2. 若暂时没有模型，可先配置人员、告警组、摄像头和训练集；实时页会显示推理未启用。
+3. 若已有 Ultralytics 兼容的 PT、ONNX 或 Engine 模型，在根目录 `.env` 中设置 `MODEL_PATH`，重启服务后进入“多图识别”上传测试图片。
+4. 要测试实时监控，添加 RTSP 摄像头并关联告警组，然后在“实时监控”选择摄像头。
+5. 要训练模型，先配置 `TRAINING_DATASET_ROOTS`，再到“模型管理 → 训练集”定义并发布数据集，最后在“训练任务”创建训练。
+
+示例 `.env`：
+
+```env
+APP_ENV=development
+DATABASE_URL=sqlite:///data/safety_detect.db
+MODEL_PATH=runs/detect/train-3/weights/best.pt
+TRAINING_DATASET_ROOTS=default=D:\datasets
+```
+
+启动器会读取根目录可选的 `.env`，但不会覆盖当前终端已经设置的环境变量。完整示例见 [.env.example](.env.example)。
+
+## 选择运行方式
+
+| 场景 | 数据库 | 启动方式 | 适用范围 |
+|---|---|---|---|
+| 本地试用 | SQLite | `start.cmd` / `start.sh` | 单应用实例、单批量工作线程 |
+| 前后端开发 | SQLite | Uvicorn + Vite | 开发调试和热更新 |
+| 生产式容器基线 | MySQL 8.4 | Docker Compose | 部署联调；上线前仍需环境验收 |
+
+不要把 SQLite 本地验证结果当作生产数据库验收结果。生产数据库要求 MySQL 8.0.13 或更高版本；上线前必须在目标环境执行迁移、仓储、批量任务、备份和恢复测试。
+
+## Docker + MySQL 部署
+
+容器镜像使用 Node.js 24 构建前端，运行阶段安装已锁定的 Python 直接依赖，并以非 root 用户启动。应用容器会先执行 Alembic 迁移，成功后再启动 Uvicorn。
+
+```bash
+cp deploy/.env.example deploy/.env
+# 编辑 deploy/.env，替换所有示例密码
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml up --build -d
+docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
+```
+
+部署后访问 `http://127.0.0.1:8000/api/health` 检查服务。Compose 默认提供：
+
+- MySQL 8.4 数据库和持久化卷
+- 应用数据与模型仓库持久化卷
+- `DATASET_HOST_DIR` 到 `/app/datasets` 的训练集挂载
+- `TRAINING_MODEL_HOST_DIR` 到 `/app/data/training-models` 的基础权重挂载
+- 数据库和应用健康检查
+
+注意：
+
+- `deploy/.env` 不得提交到 Git。
+- `DATABASE_URL` 中密码的特殊字符必须进行 URL 编码。
+- HTTPS 反向代理后应设置 `COOKIE_SECURE=true`。
+- 数据集挂载需要支持人工标注写入，宿主机权限应仅授予服务账户。
+- 当前镜像不包含 CUDA 或 Atlas 专用运行时；GPU 部署需按目标主机扩展镜像。
+
+## 主要使用流程
+
+### 实时检测与事件
+
+管理员先创建人员和告警组，再添加摄像头并配置 RTSP、ROI、抽帧间隔和目标告警组。系统按配置启动采集线程，将帧送入全局有界队列；队列满时丢弃最旧帧，避免实时视频无限积压。
+
+`fire`、`smoke` 可直接形成候选事件；`no_helmet` 需要与人员框上方 40% 的头部区域关联。候选事件默认在 5 秒内连续命中 3 次后确认，同摄像头同类型事件默认冷却 30 秒。
+
+浏览器通过 `/ws/events` 接收事件，通过 `/ws/live/{camera_id}` 接收实时 JPEG。WebSocket 使用浏览器会话 Cookie，不会把令牌写入 URL 或浏览器存储。
+
+### 多图识别
+
+1. 进入“多图识别”，选择 PNG、JPEG 或 WebP；每张最大 10 MiB，合计最多 20 张。
+2. 点击“开始识别”，任务会从等待、处理中进入完成、部分失败或失败状态。
+3. 完成后可查看放大标注图、下载单张标注图或结果 ZIP。
+4. 普通用户只能查看自己的任务，管理员可以查看全部任务。
+
+`MODEL_PATH` 为空时，页面仍能使用，但多图上传会返回 `model_unavailable`，不会创建任务或遗留上传文件。原图与结果默认保留 30 天，由后台清理器定期删除。
+
+### 数据集与模型训练
+
+训练只允许访问 `TRAINING_DATASET_ROOTS` 明确授权的目录：
+
+```env
+TRAINING_DATASET_ROOTS=construction=D:\datasets\construction;customer=D:\datasets\customer
+```
+
+每个授权根目录必须是已存在的绝对目录，不能相互嵌套。管理员可在控制台中：
+
+1. 浏览授权目录并定义训练、验证、测试分片和类别。
+2. 复制已发布版本、扫描新增图片、框选标注并校验发布。
+3. 选择基础或高级训练模式，设置预设、学习率、增强参数和验收门槛。
+4. 停止或续训任务，复制参数创建新实验，并对比 2～4 个同数据快照任务。
+5. 查看总体/分类别指标、混淆矩阵、建议置信度和误检/漏检分析。
+6. 注册通过评估的候选模型并激活。
+
+训练平台支持任意类别的 YOLO 矩形框目标检测。Construction-PPE 的 `person`、`helmet`、`no_helmet` 只是内置安全帽模板，不是类别限制。
+
+详细操作：
+
+- [训练集构建与模型训练指南](docs/training-guide.md)
+- [训练集版本与人工标注指南](docs/dataset-annotation-guide.md)
+
+## 权限说明
+
+| 页面或能力 | 管理员 | 普通用户 |
+|---|---:|---:|
+| 安全态势、实时监控、事件中心 | 是 | 是 |
+| 确认或关闭事件 | 是 | 是 |
+| 创建多图任务 | 是 | 是 |
+| 查看多图任务 | 全部任务 | 仅自己的任务 |
+| 摄像头、人员、告警组、模型与训练 | 是 | 否 |
+| 网站品牌、用户与审计日志 | 是 | 否 |
+
+前端隐藏无权入口只用于改善体验，所有权限仍由后端强制校验。
+
+## 常用配置
+
+| 环境变量 | 默认值 | 说明 |
+|---|---:|---|
+| `APP_ENV` | `development` | 运行环境；开发环境启动时自动迁移 |
+| `DATABASE_URL` | `sqlite:///data/safety_detect.db` | SQLAlchemy 数据库 URL |
+| `ADMIN_INITIAL_PASSWORD` | 空 | 首次创建 `admin` 的密码；生产环境必填 |
+| `SESSION_TTL_HOURS` | `12` | 登录会话有效期（小时） |
+| `COOKIE_SECURE` | `false` | HTTPS 生产环境应设为 `true` |
+| `MODEL_PATH` | 空 | 启动时加载的 PT、ONNX 或 Engine 模型 |
+| `UPLOAD_DIR` | `data/uploads` | Logo、多图原图和标注结果目录 |
+| `SNAPSHOT_DIR` | `data/snapshots` | 事件抓拍目录 |
+| `BATCH_RETENTION_DAYS` | `30` | 多图任务和文件保留天数 |
+| `BATCH_WORKER_COUNT` | `1` | 当前固定为 1，其他值会拒绝启动 |
+| `WORKER_COUNT` | `1` | 共享推理线程数 |
+| `FRAME_QUEUE_SIZE` | `8` | 跨摄像头共享帧队列容量 |
+| `ENABLE_RUNTIME` | `true` | 是否启用摄像头与实时推理 |
+| `FEISHU_WEBHOOK` | 空 | 飞书机器人 Webhook；为空时不通知 |
+| `TRAINING_ENABLED` | `true` | 是否启用本地训练调度器 |
+| `TRAINING_DATASET_ROOTS` | 空 | 控制台可访问的训练集授权根目录 |
+| `TRAINING_RUN_DIR` | `data/training-runs` | 训练日志、权重和评估制品目录 |
+| `TRAINING_MODEL_CACHE_DIR` | `data/training-models` | 可选基础 `.pt` 权重目录 |
+
+训练调度器还支持 `TRAINING_HEARTBEAT_SECONDS`、`TRAINING_LEASE_SECONDS` 和 `TRAINING_RECOVERY_GRACE_SECONDS`。默认值及完整注释见 [.env.example](.env.example)。
+
+RTSP URL、Webhook、数据库凭据和管理员密码属于敏感配置，应通过密钥管理系统或受保护的环境文件注入。不要把真实凭据提交到仓库或写入公开日志。
+
+## 开发与测试
+
+### 前后端热更新
+
+后端：
 
 ```powershell
-cd frontend
-npm ci
-cd ..
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --reload
 ```
 
-参考 `.env.example`，在当前终端设置所需环境变量。直接运行 Uvicorn 不会自动读取 `.env`，必须由终端或进程管理器注入配置；上述一键启动器会安全读取项目根目录的 `.env`。
-
-开发环境默认使用 `sqlite:///data/safety_detect.db`。首次启动会自动执行 Alembic 迁移；若用户表为空，会创建管理员 `admin`。未设置 `ADMIN_INITIAL_PASSWORD` 时，开发环境的临时密码是 `admin123456`。
-
-> **安全警告：** `admin123456` 仅供本地开发。首次登录返回 `must_change_password=true`，修改密码前不能访问其他受保护接口。生产环境不会使用默认密码，必须显式设置 `ADMIN_INITIAL_PASSWORD`。
-
-### 前后端开发
-
-后端开发服务使用 8000 端口：
-
-```bash
-uvicorn backend.main:app --reload
-```
-
-另开终端启动 Vite：
+另开终端启动前端：
 
 ```powershell
 cd frontend
 npm run dev
 ```
 
-开发页面使用 Vite 输出的地址（默认 <http://127.0.0.1:5173>）。`vite.config.ts` 会把 `/api` 代理到 `http://127.0.0.1:8000`，把 `/ws` 作为 WebSocket 代理到同一后端；浏览器仍以 Cookie 同源会话工作，不需要在前端配置或保存令牌。
+开发页面默认位于 <http://127.0.0.1:5173>，Vite 会将 `/api` 和 `/ws` 代理到后端的 8000 端口。
 
-### 本地 SQLite 同源运行
-
-发布式本地运行先生成前端静态文件，再由 FastAPI 同源托管。若要使用实时或多图识别，必须把 `MODEL_PATH` 指向实际存在的 Ultralytics 兼容模型；本仓库训练结果的默认示例是 `runs/detect/train-3/weights/best.pt`：
-
-```powershell
-$env:DATABASE_URL = "sqlite:///data/safety_detect.db"
-$env:MODEL_PATH = "runs/detect/train-3/weights/best.pt"
-$env:UPLOAD_DIR = "data/uploads"
-$env:BATCH_RETENTION_DAYS = "30"
-$env:BATCH_WORKER_COUNT = "1"
-cd frontend
-npm ci
-npm run build
-cd ..
-.\.venv\Scripts\python.exe -m uvicorn backend.main:app
-```
-
-SQLite 仅用于本地开发和验收，运行边界是单应用实例、`BATCH_WORKER_COUNT=1`。在后台批量工作线程、保留期清理器与 API 极端同时写入时，SQLite 仍可能报告 `database is locked`；这是本地模式可接受的限制，不应通过增加工作线程规避。先停止服务并等待占用锁的进程退出，确认没有重复实例后再重启：批量工作线程会把中断在 `processing` 的图片恢复为队列任务，清理器也会在启动时重新扫描到期任务。若文件或数据库清理仍失败，记录会保留并在后续清理周期继续重试。
-
-访问 <http://127.0.0.1:8000/> 即可打开控制台；`/dashboard` 等前端路由由 SPA fallback 处理，`/api/*`、`/ws/*`、`/docs` 和 `/openapi.json` 保持后端路由优先。更新前端代码后需重新执行 `npm run build`。
-
-访问：
-
-- 管理控制台：<http://127.0.0.1:8000/>
-- OpenAPI：<http://127.0.0.1:8000/docs>
-- 健康检查：<http://127.0.0.1:8000/api/health>
-- 事件流：`ws://127.0.0.1:8000/ws/events`
-- 实时 JPEG：`ws://127.0.0.1:8000/ws/live/{camera_id}`
-
-运行后端与前端测试：
+### 自动化检查
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
@@ -186,238 +238,90 @@ npm run typecheck
 npm run build
 ```
 
-### 首次登录
+CI 配置位于 [.github/workflows/ci.yml](.github/workflows/ci.yml)，执行 Python 测试、前端测试、类型检查和生产构建。需要真实 MySQL 或真实模型的测试通过显式环境变量启用，不会默认连接外部服务。
 
-本地开发数据库为空时会创建 `admin`。若未设置 `ADMIN_INITIAL_PASSWORD`，一次性开发密码为 `admin123456`；登录后系统会强制进入修改密码页，完成改密前不能访问其他受保护页面。生产环境不提供默认密码，必须通过进程管理器或密钥管理服务注入 `ADMIN_INITIAL_PASSWORD`，不要把真实密码写入仓库或命令历史。
+## 架构概览
 
-### 页面权限
+```text
+REST 配置 ──> SQLAlchemy / Alembic ──> reconciler ──> 每路 RTSP Capture
+                                                  │
+                                                  v
+                                        DropOldestQueue
+                                                  │
+                                                  v
+                                         inference workers
+                                                  │
+                              ┌───────────────────┼───────────────────┐
+                              v                   v                   v
+                         规则与去重           实时 JPEG           检测事件
+                                                                      │
+                                                   抓拍 / DB / 飞书 / WebSocket
+```
 
-| 页面或能力 | 管理员 | 普通用户 |
-|---|---:|---:|
-| 安全态势、实时监控、事件中心 | 是 | 是 |
-| 确认或关闭事件 | 是 | 是 |
-| 摄像头、人员、告警组、模型管理 | 是 | 否 |
-| 网站品牌、用户与审计日志 | 是 | 否 |
+训练调度器使用数据库租约、执行代次和心跳保护任务所有权。服务异常退出后不会复用旧 PID；失联任务在宽限期后标记为中断，有 `last.pt` 时可创建续训任务。
 
-前端隐藏无权入口只用于改善体验，实际权限始终由后端校验。管理员与普通用户都可以创建多图识别任务；普通用户只能查看、下载自己的任务，管理员可以查看全部任务并按创建用户筛选。
+## 目录结构
 
-### 多图识别
+```text
+backend/       # FastAPI、鉴权、数据库、实时与批量推理
+frontend/      # React/Vite 管理控制台及前端测试
+training/      # 数据转换、训练、续训、验证和模型导出 CLI
+tests/         # Python 自动化测试
+migrations/    # Alembic 迁移环境和版本脚本
+deploy/        # Dockerfile、Compose 和容器启动脚本
+docs/          # 使用指南、设计规格和实施记录
+model_repo/    # 本地导出模型目录
+```
 
-1. 从侧栏进入“多图识别”。Windows 文件选择器一次打开后可用 Ctrl/Shift 同时选择多张图片；再次打开选择器会把新选择追加到当前列表，合计最多 20 张 PNG、JPEG 或 WebP。每张编码文件最大 10 MiB；服务端还会校验扩展名、实际图片格式、可解码性和像素上限。
-2. 点击“开始识别”后，任务依次经过 `queued`（等待处理）、`processing`（处理中），最后变成 `completed`（全部成功）、`partial_failed`（部分失败）或 `failed`（全部失败）。任务详情页每秒轮询，进入最终状态后停止轮询；上传失败时已选图片会保留，便于修正后重试。
-3. 处理完成的 JPEG 标注图会直接显示在结果卡片中，图片展示本身不会触发下载。只有明确点击单张“下载标注图”或任务“下载 ZIP”操作才会下载文件；ZIP 包只包含 `results.json` 清单和成功图片的标注图，不包含原图或内部存储键。失败图片会显示稳定错误码对应的安全提示。
-4. 结果首先显示 `no_helmet`（未佩戴安全帽）违规数量；`person` 与 `helmet` 检测仍完整保留，作为人员与安全帽的上下文证据，不计入违规数量。
-5. 历史列表的开始、结束日期均按所选 UTC 自然日筛选，结束日期包含当天全天。普通用户只能看到自己的任务；无权访问其他用户任务时返回 404，避免泄露任务是否存在。
+`data/`、`datasets/`、`runs/`、`.venv/`、`frontend/node_modules/` 和 `frontend/dist/` 是本地生成目录，不应提交到 Git。
 
-`MODEL_PATH` 为空时，实时页面仍可打开，但多图上传会在 FastAPI 完成 multipart 解析后返回 HTTP 409 `model_unavailable`；服务不会进入图片校验或持久化流程，不会创建数据库记录，也不会遗留应用存储文件。若 `MODEL_PATH` 指向不存在的文件，服务会在启动时明确失败；更换 PT、ONNX 或 Engine 模型前应先用对应 Ultralytics 运行环境验证兼容性。
+## API 与更多文档
 
-原图和标注图分别保存在 `UPLOAD_DIR/batch-source` 与 `UPLOAD_DIR/batch-result` 的不透明键下。任务默认保留 30 天；清理器在启动时运行一次，之后每 6 小时运行一次。只有任务的全部文件删除成功后才删除数据库记录；文件或数据库删除失败时记录会保留，并在下一个清理周期重试。不要绕过服务直接修改这些目录。
+服务启动后访问 <http://127.0.0.1:8000/docs> 查看完整 OpenAPI 文档。常用接口包括：
 
-当前版本强制 `BATCH_WORKER_COUNT=1`。批量任务和实时画面共享同一个模型，实时请求具有优先级，批量工作线程则在图片之间让出模型；这能避免同一 GPU 上的并发模型调用，但批量推理仍会占用显存和计算资源，可能降低实时帧率。显存紧张时应减少实时路数或改用更小模型，不要增加批量工作线程。
+- `/api/cameras`、`/api/persons`、`/api/alarm-groups`
+- `/api/events`、`/api/models`
+- `/api/batch-jobs`
+- `/api/training/catalog`、`/api/training-jobs`
+- `/ws/events`、`/ws/live/{camera_id}`
 
-使用已训练模型和两张真实测试图片执行隔离烟测（测试数据库、上传文件及 Ultralytics 配置均写入 pytest 临时目录）：
+完整文档索引见 [docs/README.md](docs/README.md)。
+
+## 常见问题
+
+### Node.js 版本不符合要求
+
+启动器要求 Node.js 24.x。安装或切换版本后重新打开终端，确认 `node --version` 输出 `v24.*`。
+
+### 8000 端口被占用
+
+停止旧服务，或改用其他端口：
 
 ```powershell
-$env:REAL_MODEL_PATH = (Resolve-Path "runs/detect/train-3/weights/best.pt").Path
-$env:REAL_MODEL_TEST_IMAGE_DIR = (Resolve-Path "datasets/construction-ppe/images/test").Path
-.\.venv\Scripts\python.exe -m pytest tests/test_batch_end_to_end.py -m model -v -s
+.\start.cmd --port 8080
 ```
 
-烟测会启动本地 SQLite 应用、使用默认 `admin` 登录并完成首次强制改密、上传两张真实图片、等待后台工作线程结束，然后验证每张 JPEG 标注图的内联预览安全响应头、显式单张下载、任务 ZIP 下载、完整检测列表以及动态派生的 `no_helmet` 数量。模型检测数量不作为固定快照。它不会启动训练、摄像头、MySQL 或部署流程。
+### 页面能打开，但无法识别图片
 
-### 品牌与实时连接
+检查 `.env` 中的 `MODEL_PATH` 是否存在且与当前 Ultralytics 环境兼容。修改后需重启服务。
 
-管理员进入“系统设置 → 品牌设置”可修改网站名称并上传 PNG、JPEG 或 WebP Logo；成功后登录页、侧栏和浏览器标题会立即刷新，无需重启服务。文件限制由前后端共同校验，磁盘只保存服务端生成的存储键。
+### 新建训练时基础模型不可选
 
-事件流连接 `/ws/events`，实时画面连接 `/ws/live/{camera_id}`。两者在握手时读取浏览器会话 Cookie：未登录会以 4401 关闭，仍需首次改密会以 4403 关闭。实时画面断线后页面采用指数退避重连，并明确显示连接、断开或推理未启用状态；前端不会把会话令牌写入 URL 或浏览器存储。
+将 `.pt` 权重放到项目根目录或 `TRAINING_MODEL_CACHE_DIR`，然后重启服务刷新模型目录。
 
-## 配置
+### SQLite 报 `database is locked`
 
-| 环境变量 | 默认值 | 说明 |
-|---|---:|---|
-| `APP_ENV` | `development` | 运行环境；仅 `development` 在启动时自动执行迁移 |
-| `DATABASE_URL` | `sqlite:///data/safety_detect.db` | SQLAlchemy 数据库 URL；当前本地验收使用 SQLite |
-| `ADMIN_INITIAL_PASSWORD` | 空 | 用户表为空时创建 `admin` 的初始密码；生产环境必填 |
-| `SESSION_TTL_HOURS` | `12` | 登录会话绝对有效期（小时） |
-| `COOKIE_SECURE` | `false` | 是否为会话 Cookie 设置 `Secure`；生产 HTTPS 应设为 `true` |
-| `UPLOAD_DIR` | `data/uploads` | Logo 与后续上传文件的本地存储目录 |
-| `SNAPSHOT_DIR` | `data/snapshots` | 告警抓拍目录 |
-| `MODEL_PATH` | 空 | 启动时加载的 PT/ONNX/Engine 模型 |
-| `ANNOTATION_FONT_PATH` | 空 | 可选中文 TTF/TTC 字体；未配置时自动查找常见系统中文字体，找不到则使用英文标注避免乱码 |
-| `TRAINING_ENABLED` | `true` | 是否启用本地训练调度器 |
-| `TRAINING_DATASET_ROOTS` | 空 | 可选择和标注的服务器训练集授权根目录 |
-| `TRAINING_RUN_DIR` | `data/training-runs` | 训练任务、日志、权重和评估制品目录 |
-| `TRAINING_MODEL_CACHE_DIR` | `data/training-models` | 可选基础 `.pt` 权重目录 |
-| `TRAINING_HEARTBEAT_SECONDS` | `5` | 调度器和运行任务心跳间隔 |
-| `TRAINING_LEASE_SECONDS` | `20` | 数据库调度租约时长，必须至少为心跳的 3 倍 |
-| `TRAINING_RECOVERY_GRACE_SECONDS` | `30` | 失联任务恢复宽限期，必须不小于租约时长 |
-| `BATCH_RETENTION_DAYS` | `30` | 多图任务、原图及标注结果的保留天数，必须大于 0 |
-| `BATCH_WORKER_COUNT` | `1` | 当前版本固定为 1；其他值会拒绝启动 |
-| `WORKER_COUNT` | `1` | 推理线程数；单 GPU 建议从 1 开始压测 |
-| `FRAME_QUEUE_SIZE` | `8` | 跨摄像头共享队列容量 |
-| `RECONCILE_INTERVAL` | `3` | 配置收敛间隔（秒） |
-| `ENABLE_RUNTIME` | `true` | 是否启动摄像头和推理运行时 |
-| `FEISHU_WEBHOOK` | 空 | 飞书机器人 Webhook；为空则不通知 |
+确认只启动了一个本地应用实例，并保持 `BATCH_WORKER_COUNT=1`。停止重复实例后再启动；不要通过增加工作线程规避 SQLite 写锁限制。
 
-`rtsp_url` 和 Webhook 属于敏感配置。生产环境应通过密钥管理系统注入，API 响应和日志也应增加脱敏与鉴权；当前 MVP 默认部署在可信内网，不应直接暴露到公网。
+### CUDA 显存不足或不可用
 
-## 数据库迁移与生产配置
-
-开发环境会在应用启动时自动升级数据库。生产环境必须使用 MySQL 8.0.13 或更高版本，并由进程管理器或密钥管理服务注入 MySQL `DATABASE_URL`、初始管理员密码和 Cookie 安全参数。生产启动前必须使用同一个 `DATABASE_URL` 显式执行现有 Alembic 迁移，再启动服务；以下命令假定这些变量已经安全配置，不在命令示例中出现任何凭据：
-
-```powershell
-.\.venv\Scripts\python.exe -c "from backend.core.config import settings; from backend.db.migrate import run_migrations; run_migrations(settings.database_url)"
-.\.venv\Scripts\python.exe -m uvicorn backend.main:app
-```
-
-仓库已保留 MySQL 连接代码，以及受 `TEST_MYSQL_URL` 控制的迁移/仓储测试，但这不等于 MySQL 已经通过实机验收。本次执行只跑通了本地 SQLite；live MySQL、备份恢复和部署验收均明确延后。上线前必须在目标 MySQL 8.0.13+ 环境执行迁移、仓储、批量任务与恢复测试，不能把本地 SQLite 结果当作生产数据库验收结果。
-
-### Docker + MySQL 生产式启动
-
-容器镜像会用 Node.js 24 构建前端、安装已锁定的 Python 直接依赖，并以非 root 用户运行。应用容器启动时会先执行 Alembic 迁移，成功后才启动 Uvicorn。首次使用：
-
-```bash
-cp deploy/.env.example deploy/.env
-# 编辑 deploy/.env，替换三个密码；DATABASE_URL 中的特殊字符必须 URL 编码
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml up --build -d
-docker compose --env-file deploy/.env -f deploy/docker-compose.yml ps
-```
-
-访问 `http://127.0.0.1:8000/api/health` 验证服务。Compose 使用 MySQL 8.4 和命名卷保存数据库、应用文件及模型仓库；`DATASET_HOST_DIR` 挂载到 `/app/datasets` 以支持人工标注，`TRAINING_MODEL_HOST_DIR` 用于放置可选基础 `.pt` 权重，因此宿主机权限必须限制给服务账户。生产 HTTPS 反向代理后应把 `COOKIE_SECURE` 设为 `true`。仓库不包含真实生产密码，也不包含 CUDA/Atlas 专用运行时镜像。
-
-## 数据与训练
-
-### 在管理页面选择服务器训练集
-
-本地训练只允许使用管理员在 `TRAINING_DATASET_ROOTS` 中明确授权的服务器目录。例如：
-
-```env
-TRAINING_DATASET_ROOTS=construction=D:\datasets\construction;customer=D:\datasets\customer
-```
-
-每个根目录必须是已存在的绝对目录，多个目录用分号分隔，且不能相互嵌套。重启服务后，在“模型管理 → 训练集”中逐级浏览服务器目录，定义数据集名称、训练/验证/测试图片相对目录和类别。页面与 API 只返回别名和相对路径，不会暴露服务器绝对路径。
-
-每个分片必须同时存在对应标签目录，例如 `images/train` 对应 `labels/train`。新建训练时必须选择一个可用训练集；系统会把配置快照写入任务自己的 `dataset.yaml`，之后数据集被停用也不会改变已有任务的配置。基础模型下拉框只允许选择项目根目录或 `TRAINING_MODEL_CACHE_DIR` 中实际存在的 `.pt` 权重。
-
-训练平台支持任意类别的 YOLO 矩形框目标检测。新建任务可使用基础模式，或选择均衡、小目标、高召回、稳定微调、自定义五种高级预设，并在服务端白名单内调整学习率、增强、运行和损失权重；任务会保存不可变配置与验收快照。完成后可复制任务调整参数，并对比 2～4 个使用同一训练集发布快照的实验。Construction-PPE 的 `person`、`helmet`、`no_helmet` 只是内置安全帽模板，不是平台的类别限制。
-
-训练调度器使用数据库租约、执行代次和心跳保护任务所有权。服务异常退出后不会冒险复用旧 PID；旧任务在宽限期后标记为中断，有 `last.pt` 时可从页面创建续训任务。训练详情会展示每类别建议置信度（测试集最佳 F1 对应点）、最佳 F1、误检/漏检计数，以及 PR、F1、Precision、Recall 曲线。建议阈值用于实验起点，不等同于业务验收阈值。
-
-从原始 Construction-PPE ZIP 构建三类训练集，以及通过管理控制台或 CLI 执行冒烟训练、正式训练、停止后续训、通用测试集评估、候选模型注册和启用的完整步骤见 [训练集构建与模型训练指南](docs/training-guide.md)。
-
-在管理控制台中复制已发布版本、扫描新增无标签图片、鼠标框选人工标注、校验并发布新训练/测评集的操作见 [训练集版本与人工标注指南](docs/dataset-annotation-guide.md)。
-
-类别定义：
-
-```yaml
-names:
-  0: person
-  1: helmet
-  2: no_helmet
-  3: fire
-  4: smoke
-```
-
-当前 Construction-PPE 模型的类别为 `person`、`helmet`、`no_helmet`；未来合并的 safety 模型才会使用 `fire`、`smoke`。安全帽数据应包含完整人员框以及头部 `helmet` / `no_helmet` 框。烟火公开数据泛化有限，必须补充目标现场在不同光照、距离下的实拍，并加入反光、水汽、焊接等困难负样本。
-
-以下命令必须在 `D:\free` 仓库根目录执行，并且已安装虚拟环境：
-
-```powershell
-# Start a new 50-epoch run
-.\.venv\Scripts\python.exe -m training.train train `
-  --data training/configs/construction-ppe-helmet.yaml `
-  --model yolo11n.pt --epochs 50 --imgsz 512 --batch 4 --device 0
-
-# Resume an interrupted run; --epochs is the new total target
-.\.venv\Scripts\python.exe -m training.train resume `
-  runs/detect/train-3/weights/last.pt --epochs 80 --device 0
-
-# Evaluate best.pt on the held-out test split
-.\.venv\Scripts\python.exe -m training.train validate `
-  runs/detect/train-3/weights/best.pt `
-  --data training/configs/construction-ppe-helmet.yaml --split test --device 0
-```
-
-Standalone validation creates an auto-incremented output directory selected by
-Ultralytics, such as `runs/detect/val`, `runs/detect/val2`, or
-`runs/detect/val-3`. The console prints a compact overall and per-class metric
-summary; the selected validation directory contains plots and other validation
-artifacts. Do not assume a fixed suffix.
-
-省略 `--device` 时，如果 CUDA 可用则选择 GPU `0`，否则使用 CPU。默认值仍为 `workers=0` 和 `cache=false`，以规避 Windows 上已观察到的 page-file / multiprocessing failure。
-
-| Need | Option or file | Guidance |
-| --- | --- | --- |
-| Smaller GPU memory use | `--batch 2` or `--batch 1` | Lower batch before lowering image size |
-| Force CPU | `--device cpu` | Correct but much slower |
-| Faster repeated reads | `--cache disk` | Prefer disk over RAM on this Windows host |
-| Label a run | `--name helmet-v2` | Creates a recognizable run directory |
-| Deploy/evaluate best quality | `runs/detect/train-3/weights/best.pt` | Best validation score during training |
-| Recover exact run state | `runs/detect/train-3/weights/last.pt` | Optimizer and final epoch state for resume |
-| Review curves | `runs/detect/train-3/results.csv`, `runs/detect/train-3/results.png` | Per-epoch losses and validation metrics |
-| Review errors | `runs/detect/train-3/confusion_matrix.png`, `runs/detect/train-3/val_batch*_pred.jpg` | Class confusion and prediction examples |
-
-These artifacts live inside the individual run directory (for example, `runs/detect/train-3/`); checkpoint weights are under its `weights/` subdirectory.
-
-故障排查：
-
-- `WinError 1455`：保持 `--workers 0 --cache false`，关闭孤立的 Python 进程；如果系统仍受内存限制，增大 Windows page file。
-- CUDA out of memory：先降低 `--batch`，再降低 `--imgsz`；不要把 RAM cache 当作 GPU 显存修复方案。
-- CUDA unavailable：运行 `.\.venv\Scripts\python.exe -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda)"` 检查 PyTorch/CUDA；在修正安装前使用 `--device cpu`。
-
-自动选择 CPU/GPU 训练（请使用上面的 `train` 子命令）：
-
-```bash
-python -m training.train train --model yolo11n.pt --epochs 80 --imgsz 640
-```
-
-CPU 部署导出 FP32 ONNX：
-
-```bash
-python -m training.export runs/detect/train-3/weights/best.pt --target cpu --data-version v1
-```
-
-NVIDIA GPU 部署导出 FP16 TensorRT：
-
-```bash
-python -m training.export runs/detect/train-3/weights/best.pt --target gpu --data-version v1
-```
-
-Substitute your actual training run directory when it differs from
-`runs/detect/train-3`.
-
-导出产物写入 `model_repo/`。通过 `POST /api/models` 登记，再调用 `POST /api/models/{id}/activate` 激活；运行时会在下一次收敛时加载新模型，失败则保留旧检测器。
-
-## API 摘要
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET / POST | `/api/cameras` | 查询、新增摄像头 |
-| PATCH / DELETE | `/api/cameras/{id}` | 修改、启停、删除摄像头 |
-| GET / POST | `/api/persons` | 人员管理 |
-| PATCH / DELETE | `/api/persons/{id}` | 修改、删除人员 |
-| GET / POST | `/api/alarm-groups` | 告警组及成员 |
-| GET | `/api/events` | 按摄像头、类型、状态查询事件 |
-| PATCH | `/api/events/{id}` | 确认或关闭事件 |
-| GET / POST | `/api/models` | 模型版本管理 |
-| POST | `/api/models/{id}/activate` | 原子激活单一模型版本 |
-| GET / POST | `/api/batch-jobs` | 查询或创建多图识别任务 |
-| GET | `/api/batch-jobs/{id}` | 查询任务与逐图结果 |
-| GET | `/api/batch-jobs/{id}/images/{image_id}/download` | 下载单张标注图 |
-| GET | `/api/batch-jobs/{id}/download` | 下载任务结果 ZIP |
-
-## 生产化路线
-
-1. 增加 JWT/OIDC 和 RTSP URL 加密。
-2. 完成 MySQL 实机验收、备份恢复演练和多实例部署验证。
-3. 增加轨迹关联，使去重键从“摄像头 + 类型”细化为“摄像头 + 目标轨迹 + 类型”。
-4. 增加 Prometheus 指标、结构化日志、摄像头离线告警和推理延迟监控。
-5. 管理前端、对象存储、消息队列及多实例任务归属。
+训练时先降低 batch，再降低输入尺寸；CPU 模式可以运行但会明显更慢。不要使用 RAM cache 解决 GPU 显存不足。完整排查步骤见[训练指南](docs/training-guide.md)。
 
 ## 当前限制
 
-- SQLite 只支持本地单实例、单批量工作线程；极端并发写入可能出现 `database is locked`，生产必须切换到完成实机验收的 MySQL 8.0.13+。
-- WebSocket 实时画面为 JPEG 帧，不适合高帧率或大规模观看端；规模化时应换 WebRTC/HLS。
-- 当前去重以摄像头和事件类型为粒度，尚未接入目标追踪器。
-- 模型兼容性由 Ultralytics 运行时校验；生产部署应在激活前增加独立的模型预热和验收流程。
-- 批量任务当前使用单进程本地磁盘与单个工作线程；多实例调度和对象存储尚未验收。
+- SQLite 仅支持本地单实例和单批量工作线程；生产环境应使用完成实机验收的 MySQL。
+- WebSocket 实时画面采用 JPEG 帧，不适合大规模或高帧率观看；规模化可改用 WebRTC/HLS。
+- 当前事件去重以摄像头和事件类型为粒度，尚未接入目标轨迹关联。
+- 批量任务使用本地磁盘和单工作线程，多实例调度与对象存储尚未验收。
+- 模型兼容性由 Ultralytics 运行时校验；生产激活前仍应独立预热和验收。
+- 当前默认部署面向可信内网，不应在缺少 HTTPS、网络隔离和密钥管理时直接暴露公网。
