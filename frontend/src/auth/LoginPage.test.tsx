@@ -60,6 +60,6 @@ it("uses the built-in brand when public settings cannot be loaded", async () => 
 
   render(<App />);
 
-  expect(await screen.findByText("Safety Detect")).toBeInTheDocument();
-  expect(document.title).toBe("Safety Detect");
+  expect(await screen.findByText("DetraVision")).toBeInTheDocument();
+  expect(document.title).toBe("DetraVision");
 });

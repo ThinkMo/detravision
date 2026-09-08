@@ -13,7 +13,7 @@ from backend.storage import FileStorage, ValidatedImage
 
 
 logger = logging.getLogger(__name__)
-DEFAULT_SITE_NAME = "Safety Detect"
+DEFAULT_SITE_NAME = "DetraVision"
 LOGO_URL = "/api/settings/site/logo"
 
 

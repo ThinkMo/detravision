@@ -19,7 +19,7 @@ def test_load_dotenv_preserves_process_values_and_parses_safe_values(tmp_path: P
     env_file.write_text(
         "# local settings\n"
         "DATABASE_URL=sqlite:///custom.db\n"
-        "DISPLAY_NAME=\"Safety Detect Local\"\n"
+        "DISPLAY_NAME=\"DetraVision Local\"\n"
         "EMPTY=\n"
         "export MODEL_PATH='runs/model best.pt'\n"
         "INVALID LINE\n",
@@ -32,7 +32,7 @@ def test_load_dotenv_preserves_process_values_and_parses_safe_values(tmp_path: P
     assert loaded == {"DISPLAY_NAME", "EMPTY", "MODEL_PATH"}
     assert environment == {
         "DATABASE_URL": "sqlite:///from-process.db",
-        "DISPLAY_NAME": "Safety Detect Local",
+        "DISPLAY_NAME": "DetraVision Local",
         "EMPTY": "",
         "MODEL_PATH": "runs/model best.pt",
     }

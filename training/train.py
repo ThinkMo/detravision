@@ -31,7 +31,7 @@ def add_device_options(parser: argparse.ArgumentParser, *, include_cache: bool) 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Train, resume, or validate a Safety Detect YOLO model"
+        description="Train, resume, or validate a DetraVision YOLO model"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

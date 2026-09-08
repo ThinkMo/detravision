@@ -144,7 +144,7 @@ TRAINING_MODEL_CACHE_DIR=data/training-models
 Linux 将根目录改为服务器绝对路径，例如：
 
 ```env
-TRAINING_DATASET_ROOTS=default=/opt/safety-detect/datasets
+TRAINING_DATASET_ROOTS=default=/opt/detravision/datasets
 ```
 
 修改配置后重启服务。进入“模型管理 → 训练集”，定义或选择服务器训练集；只有校验通过且状态为“已发布”的版本可以创建训练任务。编辑中的版本必须先完成待标注图片、校验并发布。

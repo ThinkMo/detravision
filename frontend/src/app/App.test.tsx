@@ -10,7 +10,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("renders the Safety Detect application root", () => {
+it("renders the DetraVision application root", () => {
   render(<App />);
   expect(screen.getByText("正在加载站点配置")).toBeInTheDocument();
 });

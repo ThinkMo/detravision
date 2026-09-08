@@ -157,7 +157,7 @@ def test_public_site_settings_expose_only_brand(site_app):
     with client_for(site_app) as client:
         response = client.get("/api/settings/site")
     assert response.status_code == 200
-    assert response.json() == {"site_name": "Safety Detect", "logo_url": None}
+    assert response.json() == {"site_name": "DetraVision", "logo_url": None}
 
 
 def test_only_admin_can_update_site_name(site_app):
@@ -203,7 +203,7 @@ def test_admin_upload_is_content_validated_randomly_named_and_publicly_served(si
         )
         assert response.status_code == 200
         assert response.json() == {
-            "site_name": "Safety Detect",
+            "site_name": "DetraVision",
             "logo_url": "/api/settings/site/logo",
         }
         downloaded = client.get(response.json()["logo_url"])
@@ -529,7 +529,7 @@ def test_cleanup_rechecks_database_and_keeps_a_key_made_current_by_another_insta
     with session_factory.begin() as session:
         row = session.get(SiteSettings, 1)
         if row is None:
-            row = SiteSettings(id=1, site_name="Safety Detect")
+            row = SiteSettings(id=1, site_name="DetraVision")
             session.add(row)
         row.logo_key = queued_key
 

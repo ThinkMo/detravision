@@ -1,7 +1,13 @@
 {
-  "name": "safety-detect-console",
+  "name": "detravision",
   "private": true,
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ThinkMo/detravision.git"
+  },
+  "homepage": "https://github.com/ThinkMo/detravision#readme",
   "type": "module",
   "engines": {
     "node": ">=24 <25"

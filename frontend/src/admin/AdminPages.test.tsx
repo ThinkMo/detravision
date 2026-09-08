@@ -111,7 +111,7 @@ it("shows a reset password only after success and clears it on close", async () 
 });
 
 it("updates branding immediately and rejects an unsafe Logo locally", async () => {
-  let siteName = "Safety Detect";
+  let siteName = "DetraVision";
   let logoRequests = 0;
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);

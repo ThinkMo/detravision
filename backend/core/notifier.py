@@ -18,7 +18,7 @@ class FeishuNotifier:
             "msg_type": "text",
             "content": {
                 "text": (
-                    f"Safety Detect 告警\n摄像头: {event['camera_id']}\n"
+                    f"DetraVision 告警\n摄像头: {event['camera_id']}\n"
                     f"类型: {event['event_type']}\n置信度: {event['confidence']:.2%}"
                 )
             },

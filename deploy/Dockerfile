@@ -27,19 +27,19 @@ COPY alembic.ini ./
 COPY migrations/ migrations/
 COPY backend/ backend/
 COPY training/ training/
-COPY deploy/entrypoint.sh /usr/local/bin/safety-detect-entrypoint
+COPY deploy/entrypoint.sh /usr/local/bin/detravision-entrypoint
 COPY --from=frontend-builder /build/frontend/dist frontend/dist/
 
 RUN groupadd --system app \
     && useradd --system --gid app --home-dir /app app \
     && mkdir -p /app/data /app/model_repo /app/datasets \
-    && chown -R app:app /app /usr/local/bin/safety-detect-entrypoint \
-    && sed -i 's/\r$//' /usr/local/bin/safety-detect-entrypoint \
-    && chmod 755 /usr/local/bin/safety-detect-entrypoint
+    && chown -R app:app /app /usr/local/bin/detravision-entrypoint \
+    && sed -i 's/\r$//' /usr/local/bin/detravision-entrypoint \
+    && chmod 755 /usr/local/bin/detravision-entrypoint
 
 USER app
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)" || exit 1
 
-ENTRYPOINT ["/usr/local/bin/safety-detect-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/detravision-entrypoint"]

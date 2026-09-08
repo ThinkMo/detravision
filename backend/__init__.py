@@ -1,1 +1,1 @@
-"""Safety Detect backend package."""
+"""DetraVision backend package."""

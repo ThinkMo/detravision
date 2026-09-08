@@ -119,6 +119,36 @@ def test_fresh_sqlite_upgrade_creates_all_tables(tmp_path):
         "training_job",
         "training_scheduler",
     } <= names
+    site_name = next(
+        column
+        for column in inspect(create_engine(url)).get_columns("site_settings")
+        if column["name"] == "site_name"
+    )
+    assert "DetraVision" in str(site_name["default"])
+
+
+@pytest.mark.parametrize(
+    ("initial_name", "expected_name"),
+    (("Safety Detect", "DetraVision"), ("Custom Factory Vision", "Custom Factory Vision")),
+)
+def test_brand_migration_renames_only_the_legacy_default(tmp_path, initial_name, expected_name):
+    """Catches product rebranding overwriting a deployment's custom site name."""
+    url = "sqlite:///" + (tmp_path / f"brand-{expected_name}.db").as_posix()
+    config = alembic_config(url)
+    command.upgrade(config, "0010")
+    with create_engine(url).begin() as connection:
+        connection.execute(
+            text("INSERT INTO site_settings (id, site_name) VALUES (1, :site_name)"),
+            {"site_name": initial_name},
+        )
+
+    command.upgrade(config, "head")
+
+    with create_engine(url).connect() as connection:
+        actual_name = connection.execute(
+            text("SELECT site_name FROM site_settings WHERE id = 1")
+        ).scalar_one()
+    assert actual_name == expected_name
 
 
 def test_batch_migration_has_portable_foreign_keys_and_query_indexes(tmp_path):
@@ -546,7 +576,7 @@ def test_legacy_sqlite_is_stamped_then_upgraded(legacy_database_url):
     run_migrations(legacy_database_url)
 
     with create_engine(legacy_database_url).connect() as connection:
-        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0010"
+        assert connection.execute(text("select version_num from alembic_version")).scalar_one() == "0011"
         event_columns = {column["name"] for column in inspect(connection).get_columns("detection_event")}
     assert {"ack_by", "ack_user_id"} <= event_columns
 

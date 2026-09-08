@@ -1,6 +1,6 @@
-# Safety Detect — 工业安全视觉检测与训练平台
+# DetraVision — 通用目标检测与训练平台
 
-Safety Detect 是一个基于 FastAPI、React 和 Ultralytics YOLO 的集中式视觉检测系统。它可以接入多路 RTSP 视频或批量图片，识别安全帽违规、明火、烟雾等目标，生成可确认的事件，并提供模型训练、评估和版本管理能力。
+DetraVision 是一个基于 FastAPI、React 和 Ultralytics YOLO 的通用目标检测与训练平台。它可以接入多路 RTSP 视频或批量图片，识别自定义目标，生成可确认的事件，并提供数据集标注、模型训练、评估和版本管理能力。安全帽违规、明火和烟雾是项目内置示例，而不是类别限制。
 
 项目适合本地试用、算法验证和可信内网中的单机部署。没有模型或摄像头时，管理控制台和 API 仍可正常启动，方便先体验账号、配置、事件和训练集管理。
 
@@ -325,3 +325,11 @@ model_repo/    # 本地导出模型目录
 - 批量任务使用本地磁盘和单工作线程，多实例调度与对象存储尚未验收。
 - 模型兼容性由 Ultralytics 运行时校验；生产激活前仍应独立预热和验收。
 - 当前默认部署面向可信内网，不应在缺少 HTTPS、网络隔离和密钥管理时直接暴露公网。
+
+## License
+
+Copyright (C) 2026 [ThinkMo](https://github.com/ThinkMo).
+
+本项目仅依据 [GNU Affero General Public License v3.0](LICENSE)（SPDX：`AGPL-3.0-only`）授权。项目源代码地址为 <https://github.com/ThinkMo/detravision>。如果修改本项目并通过网络向用户提供服务，请同时向这些用户提供对应版本的完整源代码。
+
+本项目使用 [Ultralytics YOLO](https://www.ultralytics.com/license)。部署和再分发时还应确认你的 Ultralytics 使用方式及其他依赖项符合各自许可证；如需闭源或专有商业使用，请自行取得所需的商业授权。

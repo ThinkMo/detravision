@@ -31,7 +31,7 @@ afterEach(() => {
 it("traps keyboard focus in the mobile navigation and restores the trigger", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
-    if (path === "/api/settings/site") return Response.json({ site_name: "Safety Detect", logo_url: null });
+    if (path === "/api/settings/site") return Response.json({ site_name: "DetraVision", logo_url: null });
     if (path === "/api/auth/me") return Response.json({ id: 1, username: "admin", role: "admin", must_change_password: false });
     if (path === "/api/dashboard/summary") return Response.json(dashboardSummary);
     throw new Error(`Unexpected request: ${path}`);

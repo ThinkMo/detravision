@@ -22,7 +22,7 @@ function installApi(initialUser: User | null, loginUser?: User) {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path === "/api/settings/site") {
-        return response({ site_name: "Safety Detect", logo_url: null });
+        return response({ site_name: "DetraVision", logo_url: null });
       }
       if (path === "/api/auth/me") {
         return initialUser

@@ -306,7 +306,7 @@ class SiteSettings(Base):
     __tablename__ = "site_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    site_name: Mapped[str] = mapped_column(String(200), nullable=False, server_default=text("'Safety Detect'"))
+    site_name: Mapped[str] = mapped_column(String(200), nullable=False, server_default=text("'DetraVision'"))
     logo_key: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, server_default=text("CURRENT_TIMESTAMP"))
 

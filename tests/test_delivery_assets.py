@@ -1,7 +1,19 @@
+import json
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_distribution_declares_agpl_license_and_product_identity():
+    license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
+    package = json.loads((ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
+
+    assert "GNU AFFERO GENERAL PUBLIC LICENSE" in license_text
+    assert "Version 3, 19 November 2007" in license_text
+    assert package["name"] == "detravision"
+    assert package["license"] == "AGPL-3.0-only"
+    assert package["repository"]["url"] == "https://github.com/ThinkMo/detravision.git"
 
 
 def test_python_direct_dependencies_are_exactly_pinned():

@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Export and version a Safety Detect model")
+    parser = argparse.ArgumentParser(description="Export and version a DetraVision model")
     parser.add_argument("model")
     parser.add_argument("--target", choices=("cpu", "gpu"), default="cpu")
     parser.add_argument("--imgsz", type=int, default=640)

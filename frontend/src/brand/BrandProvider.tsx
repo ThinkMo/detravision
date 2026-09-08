@@ -11,7 +11,7 @@ import { api } from "../api/client";
 import type { SiteSettings } from "../api/types";
 
 const DEFAULT_BRAND: SiteSettings = {
-  site_name: "Safety Detect",
+  site_name: "DetraVision",
   logo_url: null,
 };
 

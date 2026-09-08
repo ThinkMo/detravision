@@ -12,7 +12,7 @@ afterEach(() => {
 it("returns focus to the navigation trigger after Escape closes the drawer", async () => {
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
-    if (path === "/api/settings/site") return Response.json({ site_name: "Safety Detect", logo_url: null });
+    if (path === "/api/settings/site") return Response.json({ site_name: "DetraVision", logo_url: null });
     if (path === "/api/auth/me") return Response.json({ id: 1, username: "admin", role: "admin", must_change_password: false });
     if (path === "/api/dashboard/summary") return Response.json({
       camera_total: 0, camera_active: 0, events_today: 0, events_new: 0, recent_events: [],

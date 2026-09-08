@@ -176,7 +176,7 @@ def _check_prerequisites(needs_node: bool) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="准备依赖、构建前端并启动 Safety Detect 本地服务。"
+        description="准备依赖、构建前端并启动 DetraVision 本地服务。"
     )
     parser.add_argument(
         "--skip-install",
@@ -220,10 +220,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "start-server": "启动本地服务",
     }
     for step in plan:
-        print(f"[Safety Detect] {labels[step.name]}...", flush=True)
+        print(f"[DetraVision] {labels[step.name]}...", flush=True)
         if step.name == "start-server":
-            print(f"[Safety Detect] 控制台：http://{args.host}:{args.port}/", flush=True)
-            print("[Safety Detect] 按 Ctrl+C 停止服务。", flush=True)
+            print(f"[DetraVision] 控制台：http://{args.host}:{args.port}/", flush=True)
+            print("[DetraVision] 按 Ctrl+C 停止服务。", flush=True)
         subprocess.run(step.args, cwd=step.cwd, env=os.environ.copy(), check=True)
     return 0
 
@@ -232,5 +232,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (StartupError, subprocess.CalledProcessError) as exc:
-        print(f"[Safety Detect] 启动失败：{exc}", file=sys.stderr)
+        print(f"[DetraVision] 启动失败：{exc}", file=sys.stderr)
         raise SystemExit(1) from None

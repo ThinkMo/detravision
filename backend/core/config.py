@@ -51,7 +51,7 @@ def _bool_env(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class Settings:
-    app_name: str = os.getenv("APP_NAME", "Safety Detect")
+    app_name: str = os.getenv("APP_NAME", "DetraVision")
     environment: str = os.getenv("APP_ENV", "development")
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///data/safety_detect.db")
     session_ttl_hours: int = int(os.getenv("SESSION_TTL_HOURS", "12"))
