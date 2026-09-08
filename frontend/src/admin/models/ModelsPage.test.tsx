@@ -92,6 +92,8 @@ describe("model training console", () => {
     await userEvent.click(await screen.findByRole("button", { name: "新建训练" }));
 
     const dialog = screen.getByRole("dialog", { name: "新建本地训练" });
+    expect(dialog).toHaveClass("training-form--wide");
+    expect(within(dialog).getByRole("button", { name: "开始训练" }).closest("form")).not.toHaveClass("training-form--wide");
     for (const model of catalog.models) expect(within(dialog).getByRole("option", { name: new RegExp(model.id.replace(".", "\\.")) })).toBeInTheDocument();
     expect(within(dialog).getByRole("option", { name: /远程/ })).toBeDisabled();
     expect(within(dialog).getByLabelText("基础模型")).toHaveValue("yolo11m.pt");

@@ -99,7 +99,7 @@ export function TrainingJobDialog({ catalog, initialRequest, pending, error, onC
   }
 
   const advancedAvailable = Boolean(catalog.advanced_config_schema && catalog.training_profiles?.length);
-  return <ModalDialog title="新建本地训练" onClose={onClose}><form className="admin-form training-form training-form--wide" onSubmit={submit}>
+  return <ModalDialog title="新建本地训练" className="training-form--wide" onClose={onClose}><form className="admin-form training-form" onSubmit={submit}>
     <div className="training-mode-tabs" role="tablist" aria-label="训练配置模式"><button type="button" role="tab" aria-selected={form.mode === "basic"} className={form.mode === "basic" ? "is-active" : ""} onClick={() => setForm({ ...form, mode: "basic", profile: "balanced" })}>基础模式</button><button type="button" role="tab" aria-selected={form.mode === "advanced"} className={form.mode === "advanced" ? "is-active" : ""} disabled={!advancedAvailable} onClick={() => setForm({ ...form, mode: "advanced" })}>高级模式</button></div>
     {!advancedAvailable ? <p className="training-form__status">当前服务端仅支持基础模式。</p> : null}
     <div className="training-basic-grid">
