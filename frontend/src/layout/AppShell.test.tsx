@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, it, vi } from "vitest";
 import { App } from "../app/App";
@@ -31,5 +31,5 @@ it("returns focus to the navigation trigger after Escape closes the drawer", asy
   await user.keyboard("{Escape}");
 
   expect(screen.queryByRole("dialog", { name: "移动导航" })).not.toBeInTheDocument();
-  expect(trigger).toHaveFocus();
+  await waitFor(() => expect(trigger).toHaveFocus());
 });
