@@ -5,6 +5,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_fresh_checkout_contains_default_training_dataset_directory():
+    """Catches the default Settings path disappearing from a clean checkout."""
+    assert (ROOT / "datasets" / ".gitkeep").is_file()
+
+
 def test_distribution_declares_agpl_license_and_product_identity():
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
     package = json.loads((ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
