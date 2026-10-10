@@ -4,6 +4,8 @@ DetraVision 是一个基于 FastAPI、React 和 Ultralytics YOLO 的通用目标
 
 项目适合本地试用、算法验证和可信内网中的单机部署。没有模型或摄像头时，管理控制台和 API 仍可正常启动，方便先体验账号、配置、事件和训练集管理。
 
+![DetraVision 安全态势首页：摄像头、事件与推理服务运行状态](docs/images/master.png)
+
 ## 核心能力
 
 - 实时检测：多路 RTSP 解码、共享推理队列、ROI、连续帧确认和事件冷却去重
@@ -163,6 +165,14 @@ TRAINING_DATASET_ROOTS=construction=D:\datasets\construction;customer=D:\dataset
 6. 注册通过评估的候选模型并激活。
 
 训练平台支持任意类别的 YOLO 矩形框目标检测。Construction-PPE 的 `person`、`helmet`、`no_helmet` 只是内置安全帽模板，不是类别限制。
+
+训练集版本管理：查看已发布和编辑中的版本，继续标注、重新扫描图片并校验发布。
+
+![训练集版本管理页面](docs/images/data.png)
+
+训练任务与评估：查看训练进度、验收结果、总体及分类别指标，并选择任务进行对比。
+
+![训练任务页面：训练进度与模型评估指标](docs/images/train.png)
 
 详细操作：
 
