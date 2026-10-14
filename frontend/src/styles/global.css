@@ -47,14 +47,14 @@ textarea {
   color: white;
   border: 0;
   border-radius: var(--radius-sm);
-  background: var(--color-safe);
+  background: var(--color-primary);
   font-size: .78rem;
   font-weight: 700;
   cursor: pointer;
 }
 
 .batch-picker:disabled { cursor: wait; opacity: .6; }
-.batch-result__violation-summary { margin: .9rem 0 .5rem; color: var(--color-danger); font-size: .8rem; font-weight: 750; }
+.batch-result__violation-summary { margin: .9rem 0 .5rem; color: var(--color-danger); font-size: .8rem; font-weight: 700; }
 .batch-detections--violation { margin-bottom: .5rem; }
 .batch-detections--violation li { color: var(--color-danger); background: #fff2f1; }
 .batch-detections--context { color: var(--color-text-muted); }
@@ -64,4 +64,21 @@ textarea {
 
 @media (max-width: 560px) {
   .batch-result__image img { max-height: 18rem; }
+}
+
+/* Shared controls use the same interaction and focus language. */
+button, input, select, textarea { border-radius: var(--radius-sm); }
+button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+button { min-height: 2.75rem; cursor: pointer; transition: background-color .16s ease, border-color .16s ease, box-shadow .16s ease; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+input:not([type="checkbox"]):not([type="radio"]), select { min-height: 2.75rem; }
+input, select, textarea { min-width: 0; accent-color: var(--color-primary); }
+input:not([type="checkbox"]):not([type="radio"]):focus, select:focus, textarea:focus { border-color: var(--color-primary); outline: 3px solid rgb(37 99 235 / 12%); outline-offset: 1px; }
+button:not(:disabled):hover { filter: brightness(.97); }
+a { text-underline-offset: .2em; }
+h1, h2, h3 { font-weight: 700; letter-spacing: -.025em; }
+progress { accent-color: var(--color-primary); }
+::selection { color: #1e3a8a; background: #dbeafe; }
+@media (prefers-reduced-motion: reduce) {
+  button { transition: none; }
 }

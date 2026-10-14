@@ -6,6 +6,7 @@ import { EmptyState } from "../components/EmptyState";
 import { ErrorPanel } from "../components/ErrorPanel";
 import { LoadingPanel } from "../components/LoadingPanel";
 import { StatusBadge } from "../components/StatusBadge";
+import { WorkspaceActions } from "./WorkspaceActions";
 import "./dashboard.css";
 
 export function useDashboardSummary() {
@@ -47,6 +48,8 @@ export function DashboardPage() {
           {data.events_new > 0 ? `${data.events_new} 项待处理` : "当前无待处理事件"}
         </StatusBadge>
       </div>
+
+      <WorkspaceActions />
 
       <div className="metric-grid">
         <article className="metric-card">

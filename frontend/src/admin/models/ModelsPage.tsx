@@ -1,4 +1,5 @@
 import { FormEvent, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import type { ModelVersion, TrainingDataset, TrainingJobCreate } from "../../api/types";
@@ -35,7 +36,14 @@ function ModelVersions({ message, setMessage }: { message: string; setMessage: (
 
 export function ModelsPage() {
   const client = useQueryClient();
-  const [tab, setTab] = useState<"models" | "datasets" | "training">("models");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = searchParams.get("view");
+  const tab = view === "datasets" || view === "training" ? view : "models";
+  const setTab = (next: "models" | "datasets" | "training") => setSearchParams((previous) => {
+    const updated = new URLSearchParams(previous);
+    updated.set("view", next);
+    return updated;
+  });
   const [showTraining, setShowTraining] = useState(false);
   const [trainingInitial, setTrainingInitial] = useState<TrainingJobCreate | null>(null);
   const [message, setMessage] = useState("");
@@ -46,11 +54,16 @@ export function ModelsPage() {
   const hasModel = Boolean(catalog.data?.models.some((model) => model.available));
 
   return <section className="admin-page">
-    <AdminHeading eyebrow="MODEL & TRAINING" title="模型管理" description="训练、评估、注册并安全切换后端识别模型" />
+    <AdminHeading eyebrow="MODEL & TRAINING" title="模型管理" description="在一个工作台完成数据标注、YOLO 训练、效果评估与模型发布" />
+    <ol className="model-workflow" aria-label="模型构建流程">
+      <li><span>01</span><div><strong>准备与标注</strong><small>定义训练集，标注目标并校验发布</small></div></li>
+      <li><span>02</span><div><strong>训练与评估</strong><small>从基础模式开始，比较指标与案例</small></div></li>
+      <li><span>03</span><div><strong>注册与识别</strong><small>注册候选模型，激活后验证现场效果</small></div></li>
+    </ol>
     <div className="admin-tabs" role="tablist" aria-label="模型管理视图">
-      <button type="button" role="tab" aria-selected={tab === "models"} className={tab === "models" ? "admin-tabs__active" : ""} onClick={() => setTab("models")}>模型版本</button>
       <button type="button" role="tab" aria-selected={tab === "datasets"} className={tab === "datasets" ? "admin-tabs__active" : ""} onClick={() => setTab("datasets")}>训练集</button>
       <button type="button" role="tab" aria-selected={tab === "training"} className={tab === "training" ? "admin-tabs__active" : ""} onClick={() => setTab("training")}>训练任务</button>
+      <button type="button" role="tab" aria-selected={tab === "models"} className={tab === "models" ? "admin-tabs__active" : ""} onClick={() => setTab("models")}>模型版本</button>
     </div>
     {tab === "models" ? <ModelVersions message={message} setMessage={setMessage} /> : null}
     {tab === "datasets" ? annotating ? <AnnotationWorkspace dataset={annotating} onClose={() => setAnnotating(null)} /> : <TrainingDatasetsPanel onAnnotate={setAnnotating} /> : null}
@@ -60,7 +73,8 @@ export function ModelsPage() {
         <button type="button" disabled={!hasDataset || !hasModel} onClick={() => { createTraining.reset(); setTrainingInitial(null); setShowTraining(true); }}>新建训练</button>
       </div>
       {catalog.data.scheduler_state === "unavailable" || catalog.data.scheduler_state === "unknown" ? <AdminNotice message="训练调度服务当前未运行；任务仍可创建并排队，服务恢复后会自动处理。" error /> : null}
-      <AdminNotice message={message || (!hasDataset ? "请先定义一个可用的服务器训练集" : !hasModel ? "请先准备基础模型权重" : "")} error={!hasDataset || !hasModel} />
+      <AdminNotice message={message || (!hasDataset ? "请先定义并发布训练集，再开始训练。" : !hasModel ? "请先准备基础模型权重，再刷新模型目录。" : "")} />
+      {!hasDataset ? <div className="training-setup-action"><button type="button" className="secondary-button" onClick={() => setTab("datasets")}>前往训练集</button><span>定义目录、完成标注并校验发布后，即可在这里选择。</span></div> : null}
       <TrainingJobsPanel supportedConfigVersion={catalog.data.config_schema_version ?? 1} onRegistered={() => void client.invalidateQueries({ queryKey: ["admin", "models"] })} onClone={(value) => { createTraining.reset(); setTrainingInitial(value); setShowTraining(true); }} />
       {showTraining ? <TrainingJobDialog catalog={catalog.data} initialRequest={trainingInitial} pending={createTraining.isPending} error={createTraining.isError ? errorMessage(createTraining.error, "创建训练任务失败") : ""} onClose={() => { setShowTraining(false); setTrainingInitial(null); }} onSubmit={(value) => createTraining.mutate(value)} /> : null}
     </> : null}

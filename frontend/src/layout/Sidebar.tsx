@@ -5,7 +5,7 @@ import {
   ChartNoAxesCombined,
   ImageUp,
   Settings,
-  ShieldCheck,
+  ScanLine,
   SlidersHorizontal,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -37,11 +37,11 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     <div className="sidebar__inner">
       <div className="sidebar__brand">
         <span className="sidebar__brand-mark">
-          {logoUrl ? <img src={logoUrl} alt="" /> : <ShieldCheck aria-hidden="true" size={24} />}
+          {logoUrl ? <img src={logoUrl} alt="" /> : <ScanLine aria-hidden="true" size={24} />}
         </span>
         <span>
           <strong>{siteName}</strong>
-          <small>安全运营控制台</small>
+          <small>视觉 AI 工作台</small>
         </span>
       </div>
       <nav aria-label="主导航" className="sidebar__nav">
@@ -61,7 +61,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       </nav>
       <div className="sidebar__footer">
         <span className="sidebar__pulse" aria-hidden="true" />
-        本地安全服务
+        YOLO · 标注 / 训练 / 识别
       </div>
     </div>
   );

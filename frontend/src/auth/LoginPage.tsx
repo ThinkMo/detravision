@@ -80,11 +80,11 @@ export function LoginPage() {
     <main className="auth-page">
       <section className="auth-card" aria-labelledby="login-title">
         <div className="brand-mark" aria-hidden={logoUrl ? undefined : true}>
-          {logoUrl ? <img src={logoUrl} alt={`${siteName} Logo`} /> : <span>SD</span>}
+          {logoUrl ? <img src={logoUrl} alt={`${siteName} Logo`} /> : <span>DV</span>}
         </div>
         <p className="auth-card__brand">{siteName}</p>
         <h1 id="login-title">登录管理控制台</h1>
-        <p className="auth-card__intro">使用本地账号进入安全监测工作台</p>
+        <p className="auth-card__intro">标注数据、训练模型、验证识别效果</p>
         <form ref={formRef} onSubmit={handleSubmit} className="auth-form">
           <label htmlFor="username">用户名</label>
           <input id="username" name="username" autoComplete="username" required autoFocus />

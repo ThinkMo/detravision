@@ -44,7 +44,7 @@ export function Header({
           <Menu aria-hidden="true" size={21} />
         </button>
         <div>
-          <p>运营中心</p>
+          <p>VISION WORKSPACE</p>
           <strong>{title}</strong>
         </div>
       </div>

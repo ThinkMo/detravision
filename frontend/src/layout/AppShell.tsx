@@ -73,7 +73,7 @@ export function AppShell() {
       ) : null}
       <div className="app-shell__main">
         <Header
-          title={titles[location.pathname] ?? "安全运营"}
+          title={titles[location.pathname] ?? "视觉工作台"}
           runtime={summary.data?.runtime}
           runtimeLoading={summary.isLoading}
           onOpenNavigation={() => setNavigationOpen(true)}
