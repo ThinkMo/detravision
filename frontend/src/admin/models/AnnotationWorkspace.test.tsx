@@ -49,6 +49,7 @@ it("loads pending test images, draws a box and saves the annotation", async () =
   vi.stubGlobal("PointerEvent", MouseEvent);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(<QueryClientProvider client={client}><AnnotationWorkspace dataset={dataset} onClose={() => undefined} /></QueryClientProvider>);
+  await userEvent.selectOptions(screen.getByLabelText("数据分区"), "test" );
   expect(await screen.findByText("new.jpg")).toBeVisible();
   const canvas = await screen.findByLabelText("图片标注画布");
   Object.defineProperty(canvas, "getBoundingClientRect", { value: () => ({ left: 0, top: 0, width: 1000, height: 500, right: 1000, bottom: 500, x: 0, y: 0, toJSON: () => ({}) }) });
@@ -68,4 +69,61 @@ it("loads pending test images, draws a box and saves the annotation", async () =
   await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/training/datasets/2/images/9/annotations", expect.objectContaining({ method: "PUT" })));
   expect(screen.getByRole("status")).toHaveTextContent("标注已保存");
   await waitFor(() => expect(screen.getByRole("button", { name: /next.jpg/ })).toHaveClass("is-active"));
+});
+
+async function pagedAnnotationServer() {
+  const records = Array.from({ length: 51 }, (_, index) => ({ id: index + 9, dataset_id: 2, split: "test", image_key: `frame-${index + 1}.jpg`, display_name: `frame-${index + 1}.jpg`, width: 1000, height: 500, review_status: "pending_annotation", validation_code: null, revision: 0 }));
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://test.local");
+    if (url.pathname === "/api/training/datasets/2/images") {
+      const page = Number(url.searchParams.get("page") ?? 1);
+      const status = url.searchParams.get("status");
+      const filtered = url.searchParams.get("split") === "test" ? records.filter(r => !status || r.review_status === status) : [];
+      return Response.json({ items: filtered.slice((page - 1) * 50, page * 50), total: filtered.length, page, page_size: 50 });
+    }
+    const match = url.pathname.match(/\/images\/(\d+)(?:\/(annotations|confirm-empty))?$/);
+    const image = match ? records.find(r => r.id === Number(match[1])) : undefined;
+    if (!image) throw new Error(`Unexpected ${url.pathname}`);
+    if (match![2] && init?.method !== "GET") {
+      image.review_status = match![2] === "confirm-empty" ? "confirmed_empty" : "annotated";
+      image.revision += 1;
+      return Response.json(image);
+    }
+    return Response.json({ ...image, boxes: [{ class_id: 2, x_center: .2, y_center: .2, width: .1, height: .1 }] });
+  }));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  render(<QueryClientProvider client={client}><AnnotationWorkspace dataset={dataset} onClose={() => undefined} /></QueryClientProvider>);
+  await userEvent.selectOptions(screen.getByLabelText("数据分区"), "test" );
+}
+
+it("reaches images beyond the first fifty and resets the page on split changes", async () => {
+  await pagedAnnotationServer();
+  await screen.findByRole("button", { name: /^frame-1\.jpg/ });
+  await userEvent.click(screen.getByRole("button", { name: "下一页" }));
+  expect(await screen.findByRole("button", { name: /^frame-51\.jpg/ })).toHaveClass("is-active");
+  expect(screen.getByRole("navigation", { name: "标注图片分页" })).toHaveTextContent("第 2 / 2 页");
+  await userEvent.selectOptions(screen.getByLabelText("数据分区"), "val");
+  expect(await screen.findByText(/验证集暂无图片/)).toBeVisible();
+  await userEvent.selectOptions(screen.getByLabelText("数据分区"), "test");
+  expect(await screen.findByRole("button", { name: /^frame-1\.jpg/ })).toHaveClass("is-active");
+});
+
+it("advances from the last image of a page after saving", async () => {
+  await pagedAnnotationServer();
+  await userEvent.click(await screen.findByRole("button", { name: /^frame-50\.jpg/ }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "保存标注" })).toBeEnabled());
+  await userEvent.click(screen.getByRole("button", { name: "保存标注" }));
+  expect(await screen.findByRole("button", { name: /^frame-51\.jpg/ })).toHaveClass("is-active");
+});
+
+it("returns to a valid page after confirming its last pending image", async () => {
+  await pagedAnnotationServer();
+  await screen.findByRole("button", { name: /^frame-1\.jpg/ });
+  await userEvent.selectOptions(screen.getByLabelText("状态"), "pending_annotation");
+  await userEvent.click(await screen.findByRole("button", { name: "下一页" }));
+  await screen.findByRole("button", { name: /^frame-51\.jpg/ });
+  await waitFor(() => expect(screen.getByRole("button", { name: "确认无目标" })).toBeEnabled());
+  await userEvent.click(screen.getByRole("button", { name: "确认无目标" }));
+  expect(await screen.findByRole("button", { name: /^frame-1\.jpg/ })).toHaveClass("is-active");
+  expect(screen.getByRole("navigation", { name: "标注图片分页" })).toHaveTextContent("第 1 / 1 页");
 });

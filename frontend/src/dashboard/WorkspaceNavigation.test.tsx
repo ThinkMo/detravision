@@ -70,8 +70,14 @@ it("opens a dataset deep link and preserves view history and unrelated query par
   expect(await screen.findByRole("tab", { name: "训练集" })).toHaveAttribute("aria-selected", "true");
 });
 
-it("falls back to model versions for an unknown view", async () => {
-  renderModels("/admin/models?view=unknown");
+it.each(["/admin/models", "/admin/models?view=unknown"])("opens dataset preparation by default at %s", async (entry) => {
+  renderModels(entry);
+  expect(await screen.findByRole("tab", { name: "训练集" })).toHaveAttribute("aria-selected", "true");
+  expect(await screen.findByRole("button", { name: "定义训练集" })).toBeInTheDocument();
+});
+
+it("keeps model versions accessible through an explicit deep link", async () => {
+  renderModels("/admin/models?view=models");
   expect(await screen.findByRole("tab", { name: "模型版本" })).toHaveAttribute("aria-selected", "true");
   expect(await screen.findByText("尚未登记模型")).toBeInTheDocument();
 });

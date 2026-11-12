@@ -136,6 +136,7 @@ class TrainingManifest:
     advanced_config: dict[str, object]
     acceptance_config: dict[str, object]
     resume_checkpoint: str | None = None
+    provenance: dict[str, object] | None = None
     _legacy: bool = False
 
     @classmethod
@@ -148,8 +149,21 @@ class TrainingManifest:
             _MANIFEST_KEYS | _MANIFEST_ADVANCED_KEYS,
             _MANIFEST_KEYS | _MANIFEST_ADVANCED_KEYS | _MANIFEST_OPTIONAL_KEYS,
         }
-        if frozenset(manifest_keys) not in allowed:
+        if frozenset(manifest_keys - {"provenance"}) not in allowed:
             raise ValueError("training manifest has unsupported or missing fields")
+        provenance = values.get("provenance")
+        if "provenance" in values:
+            provenance = dict(_mapping(provenance, "provenance"))
+            if set(provenance) != {"dataset_manifest_digest", "training_profile", "profile_version"}:
+                raise ValueError("unsupported provenance fields")
+            digest = provenance["dataset_manifest_digest"]
+            if digest is not None and (not isinstance(digest, str) or _SHA256.fullmatch(digest) is None):
+                raise ValueError("invalid dataset digest")
+            if provenance["training_profile"] not in {"balanced", "small_object", "high_recall", "stable_finetune", "custom", "legacy"}:
+                raise ValueError("invalid training profile")
+            profile_version = provenance["profile_version"]
+            if profile_version is not None and (type(profile_version) is not int or profile_version < 1):
+                raise ValueError("invalid profile version")
         has_advanced_snapshot = _MANIFEST_ADVANCED_KEYS <= manifest_keys
         base_model = _string(values, "base_model")
         if _MODEL_ID.fullmatch(base_model) is None:
@@ -237,6 +251,7 @@ class TrainingManifest:
             advanced_config=advanced_config,
             acceptance_config=acceptance_config,
             resume_checkpoint=resume_checkpoint,
+            provenance=provenance,
             _legacy=not has_advanced_snapshot,
         )
 
@@ -249,6 +264,8 @@ class TrainingManifest:
                 payload.pop(key)
         if payload["resume_checkpoint"] is None:
             del payload["resume_checkpoint"]
+        if payload["provenance"] is None:
+            del payload["provenance"]
         return payload
 
 

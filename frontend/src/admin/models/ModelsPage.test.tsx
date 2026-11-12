@@ -17,7 +17,8 @@ const catalog = {
   datasets: [{ id: 3, key: "dataset:3", name: "工地安全帽", root_alias: "primary", directory: "site-a", train_split: "images/train", val_split: "images/val", test_split: "images/test", classes: ["person", "helmet", "no_helmet"], enabled: true, available: true, reason: null }],
   default_dataset_key: "dataset:3",
   config_schema_version: 1,
-  profile_version: 1,
+  profile_version: 2,
+  base_defaults: { base_model: "yolo11n.pt", imgsz: 640, epochs: 100, batch: "auto", device: "auto", patience: 50 },
   training_profiles: [
     { id: "balanced", label: "均衡", description: "通用默认基线", recommended: { imgsz: 640, epochs: 100, patience: 50 }, overrides: {} },
     { id: "small_object", label: "小目标增强", description: "远处和小尺寸目标", recommended: { imgsz: 960, epochs: 100, patience: 50 }, overrides: {} },
@@ -45,7 +46,7 @@ const catalog = {
 
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={client}><MemoryRouter><ModelsPage /></MemoryRouter></QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={["/admin/models?view=models"]}><ModelsPage /></MemoryRouter></QueryClientProvider>);
 }
 
 afterEach(() => {
@@ -97,11 +98,11 @@ describe("model training console", () => {
     expect(within(dialog).getByRole("button", { name: "开始训练" }).closest("form")).not.toHaveClass("training-form--wide");
     for (const model of catalog.models) expect(within(dialog).getByRole("option", { name: new RegExp(model.id.replace(".", "\\.")) })).toBeInTheDocument();
     expect(within(dialog).getByRole("option", { name: /远程/ })).toBeDisabled();
-    expect(within(dialog).getByLabelText("基础模型")).toHaveValue("yolo11m.pt");
+    expect(within(dialog).getByLabelText("基础模型")).toHaveValue("yolo11n.pt");
     expect(within(dialog).getByLabelText("输入尺寸")).toHaveValue("640");
 
     await userEvent.click(within(dialog).getByRole("button", { name: "开始训练" }));
-    await waitFor(() => expect(createBody).toMatchObject({ executor: "local", base_model: "yolo11m.pt", imgsz: 640, epochs: 100, batch: "auto", device: "auto", patience: 50, mode: "basic", profile: "balanced", advanced_config: {}, acceptance_config: { schema_version: 1, overall: { map50: 0.5 } } }));
+    await waitFor(() => expect(createBody).toMatchObject({ executor: "local", base_model: "yolo11n.pt", imgsz: 640, epochs: 100, batch: "auto", device: "auto", patience: 50, mode: "basic", profile: "balanced", advanced_config: {}, acceptance_config: { schema_version: 1, overall: { map50: 0.5 } } }));
   });
 
   it("builds an advanced request from the selected catalog preset and user overrides", async () => {
@@ -125,8 +126,8 @@ describe("model training console", () => {
     await userEvent.selectOptions(within(dialog).getAllByLabelText("训练预设")[0], "high_recall");
     await userEvent.clear(within(dialog).getByLabelText("初始学习率"));
     await userEvent.type(within(dialog).getByLabelText("初始学习率"), "0.002");
-    await userEvent.click(within(dialog).getByText("最终配置摘要"));
-    const summary = within(dialog).getByText("最终配置摘要").parentElement!;
+    await userEvent.click(within(dialog).getByText("请求配置摘要"));
+    const summary = within(dialog).getByText("请求配置摘要").parentElement!;
     expect(within(summary).getByText("lr0")).toBeInTheDocument();
     expect(within(summary).getByText("0.002")).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "开始训练" }));
@@ -147,6 +148,7 @@ describe("model training console", () => {
     await userEvent.click(await screen.findByRole("button", { name: "新建训练" }));
     const dialog = screen.getByRole("dialog", { name: "新建本地训练" });
     await userEvent.click(within(dialog).getByRole("tab", { name: "高级模式" }));
+    await userEvent.selectOptions(within(dialog).getByLabelText("优化器"), "AdamW");
     await userEvent.clear(within(dialog).getByLabelText("初始学习率"));
     await userEvent.type(within(dialog).getByLabelText("初始学习率"), "0.2");
     expect(within(dialog).getByRole("alert")).toHaveTextContent("初始学习率必须在 0.000001 到 0.1 之间");
@@ -193,6 +195,7 @@ describe("model training console", () => {
     await userEvent.click(await screen.findByRole("button", { name: "新建训练" }));
     const dialog = screen.getByRole("dialog", { name: "新建本地训练" });
     await userEvent.selectOptions(within(dialog).getByLabelText("基础模型"), "yolo11x.pt");
+    await userEvent.selectOptions(within(dialog).getByLabelText("基础模型"), "yolo11m.pt");
     await userEvent.selectOptions(within(dialog).getByLabelText("设备"), "cpu");
     await userEvent.click(within(dialog).getByRole("button", { name: "开始训练" }));
 

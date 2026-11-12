@@ -14,7 +14,7 @@ from backend.training.dataset_service import DatasetService
 
 
 @pytest.fixture
-def annotation_context(tmp_path):
+def annotation_context(tmp_path, request):
     from backend.training.annotation_service import AnnotationService
     from backend.training.dataset_filesystem import DatasetFilesystem
 
@@ -22,7 +22,7 @@ def annotation_context(tmp_path):
     for kind in ("images", "labels"):
         for split in ("train", "val", "test"):
             (root / "source" / kind / split).mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", (100, 80), "white").save(root / "source/images/test/image.jpg")
+    Image.new("RGB", getattr(request, "param", (100, 80)), "white").save(root / "source/images/test/image.jpg")
     url = "sqlite:///" + (tmp_path / "annotations.db").as_posix()
     run_migrations(url)
     engine = create_engine_from_url(url)
@@ -117,3 +117,25 @@ def test_only_unused_trailing_class_can_be_deleted(annotation_context):
         service.delete_class(editing["id"], added["revision"], 3)
     assert used.value.code == "class_in_use"
     assert saved["review_status"] == "annotated"
+
+
+@pytest.mark.parametrize("annotation_context", [(2560, 1440), (1024, 683), (683, 1024)], indirect=True)
+def test_saved_annotations_reload_at_the_same_original_image_pixels(annotation_context):
+    service, _repository, _path, editing, image = annotation_context
+    width, height = image["width"], image["height"]
+    saved = service.save(editing["id"], image["id"], image["revision"], [{
+        "class_id": 2,
+        "x_center": 159.125 / width,
+        "y_center": 111.0625 / height,
+        "width": 93.75 / width,
+        "height": 61.125 / height,
+    }])
+    loaded = service.get_image(editing["id"], image["id"])
+    assert saved["revision"] == loaded["revision"] == 1
+    assert (loaded["width"], loaded["height"]) == (width, height)
+    box, = loaded["boxes"]
+    assert box["class_id"] == 2
+    assert (box["x_center"] - box["width"] / 2) * width == pytest.approx(112.25, abs=.01)
+    assert (box["y_center"] - box["height"] / 2) * height == pytest.approx(80.5, abs=.01)
+    assert box["width"] * width == pytest.approx(93.75, abs=.01)
+    assert box["height"] * height == pytest.approx(61.125, abs=.01)

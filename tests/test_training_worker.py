@@ -608,7 +608,7 @@ def test_worker_dispatches_training_progress_test_evaluation_and_digest(
     ]
     canonical_best = Path(str(payload["run_dir"])) / "weights" / "best.pt"
     assert Path(evaluation_model.model) == canonical_best
-    assert evaluation_model.val_calls == [
+    assert evaluation_model.val_calls[1:] == [
         {
             "data": payload["dataset_yaml"],
             "split": "test",
@@ -690,7 +690,7 @@ def test_worker_maps_only_canonical_advanced_fields_to_yolo_train(tmp_path: Path
     effective = json.loads(
         (Path(str(payload["run_dir"])) / "effective_config.json").read_text("utf-8")
     )
-    assert effective == {
+    assert {key: effective[key] for key in ("config_schema_version", "base", "advanced_config")} == {
         "config_schema_version": 1,
         "base": {
             "base_model": "yolo11m.pt",
@@ -802,7 +802,7 @@ def test_worker_uses_fit_epoch_callback_for_current_validation_metrics(tmp_path:
         project_root=tmp_path,
     ) == 0
 
-    assert set(FakeYOLO.instances[0].callbacks) == {"on_fit_epoch_end"}
+    assert set(FakeYOLO.instances[0].callbacks) == {"on_fit_epoch_end", "on_train_start", "on_train_end"}
     progress = json.loads(
         (Path(str(payload["run_dir"])) / "progress.json").read_text(encoding="utf-8")
     )
@@ -979,3 +979,78 @@ def test_worker_rejects_best_checkpoint_resolving_outside_run(tmp_path: Path):
     )
     assert result["error_code"] == "training_failed"
     assert not (Path(str(payload["run_dir"])) / "weights" / "best.pt").exists()
+
+
+def test_worker_records_optimizer_values_after_auto_resolution_without_private_args(tmp_path):
+    """Catches persisting request lr0/batch instead of the initialized optimizer."""
+    import torch
+
+    class ResolvedYOLO(FakeYOLO):
+        def train(self, **kwargs):
+            self.trainer.args = SimpleNamespace(
+                **{**kwargs, "warmup_bias_lr": 0.0, "secret": str(tmp_path)},
+            )
+            self.trainer.device = torch.device("cpu")
+            self.trainer.optimizer = torch.optim.AdamW(
+                [torch.nn.Parameter(torch.zeros(1))], lr=0.001429, betas=(0.9, 0.999),
+            )
+            for group in self.trainer.optimizer.param_groups:
+                group["initial_lr"] = group["lr"]
+            self.callbacks["on_train_start"](self.trainer)
+            return super().train(**kwargs)
+
+    payload = advanced_manifest_payload(tmp_path)
+    payload["advanced_config"] = resolve_training_config(
+        mode="basic", profile="balanced", overrides=None, epochs=100,
+    )
+    path = Path(payload["run_dir"]) / "manifest.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert main(["--manifest", str(path)], yolo_cls=ResolvedYOLO,
+                cuda_available=lambda: False, project_root=tmp_path) == 0
+    effective = json.loads((path.parent / "effective_config.json").read_text("utf-8"))
+    assert effective["advanced_config"]["lr0"] == 0.01
+    runtime = effective["runtime"]
+    assert runtime["optimizer"]["name"] == "AdamW"
+    assert runtime["optimizer"]["param_groups"][0]["initial_lr"] == 0.001429
+    assert runtime["batch"] == 6
+    assert runtime["device"] == "cpu"
+    assert runtime["advanced_config"]["warmup_bias_lr"] == 0.0
+    assert runtime["advanced_config"]["lr0"] == 0.001429
+    assert runtime["advanced_config"]["momentum"] == 0.9
+    assert "torch" in runtime["versions"]
+    assert str(tmp_path) not in json.dumps(effective)
+
+
+def test_worker_failed_before_optimizer_setup_keeps_pending_runtime(tmp_path):
+    """Catches recording guessed parameters for an initialization failure."""
+    path, payload = write_manifest(tmp_path)
+    FakeYOLO.fail_stage = "train"
+    assert main(["--manifest", str(path)], yolo_cls=FakeYOLO,
+                cuda_available=lambda: False, project_root=tmp_path) == 1
+    effective = json.loads((Path(payload["run_dir"]) / "effective_config.json").read_text("utf-8"))
+    assert effective["runtime"] is None
+
+
+def test_manifest_round_trips_optional_evidence_provenance_and_rejects_private_fields(tmp_path):
+    """Catches losing the dataset/profile identity required for fair comparisons."""
+    payload = advanced_manifest_payload(tmp_path)
+    payload["provenance"] = {"dataset_manifest_digest": "d" * 64,
+                             "training_profile": "high_recall", "profile_version": 2}
+    assert TrainingManifest.from_json(payload).to_json() == payload
+    payload["provenance"]["path"] = str(tmp_path)
+    with pytest.raises(ValueError):
+        TrainingManifest.from_json(payload)
+
+
+def test_worker_saves_best_checkpoint_validation_separately_from_test_metrics(tmp_path):
+    """Catches test metrics being used as preset tuning evidence."""
+    path, payload = write_manifest(tmp_path)
+    assert main(["--manifest", str(path)], yolo_cls=FakeYOLO,
+                cuda_available=lambda: False, project_root=tmp_path) == 0
+    validation_path = Path(payload["run_dir"]) / "validation.json"
+    assert validation_path.is_file()
+    validation = json.loads(validation_path.read_text("utf-8"))
+    assert validation["split"] == "val"
+    assert validation["metrics"]["map50_95"] == 0.61
+    assert FakeYOLO.instances[1].val_calls[0]["split"] == "val"
+    assert FakeYOLO.instances[1].val_calls[1]["split"] == "test"

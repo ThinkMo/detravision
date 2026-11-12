@@ -413,3 +413,19 @@ def test_admin_deletes_training_job_with_audit(tmp_path: Path) -> None:
     assert response.status_code == 204
     assert service.deleted == [1]
     assert any(row[0][1:4] == ("training_delete", "training_job", 1) for row in audit.rows)
+
+
+def test_actual_configuration_and_validation_artifacts_are_admin_only(tmp_path):
+    """Catches config being inaccessible or serving JSON as an image."""
+    app, _, _ = _app(tmp_path)
+    storage = app.state.training_storage
+    run_key = app.state.training_service.get_job(1)["run_key"]
+    for kind in ("effective_config", "validation"):
+        storage.resolve_artifact(run_key, kind).write_text('{"runtime":null}', encoding="utf-8")
+    with TestClient(app) as client:
+        detail = client.get("/api/training-jobs/1").json()
+        for kind in ("effective_config", "validation"):
+            response = client.get(detail[kind + "_url"])
+            assert response.status_code == 200
+            assert response.headers["content-type"] == "application/json"
+            assert response.json() == {"runtime": None}

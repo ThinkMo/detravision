@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
@@ -157,7 +158,8 @@ class TrainingDatasetRepository:
             return [_dataset_dict(row) for row in rows]
 
     def upsert_image_index(
-        self, dataset_id: int, rows: Sequence[Mapping[str, object]]
+        self, dataset_id: int, rows: Sequence[Mapping[str, object]],
+        *, expected_revision: int | None = None,
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         try:
@@ -165,6 +167,16 @@ class TrainingDatasetRepository:
                 dataset = session.get(TrainingDataset, dataset_id)
                 if dataset is None or dataset.status != "editing":
                     raise TrainingDatasetConflictError("dataset is not editable")
+                if expected_revision is not None:
+                    locked = session.execute(
+                        update(TrainingDataset).where(
+                            TrainingDataset.id == dataset_id,
+                            TrainingDataset.status == "editing",
+                            TrainingDataset.revision == expected_revision,
+                        ).values(revision=expected_revision)
+                    )
+                    if locked.rowcount != 1:
+                        raise TrainingDatasetConflictError("dataset changed during scan")
                 for values in rows:
                     row = session.scalar(
                         select(TrainingDatasetImage).where(
@@ -247,6 +259,34 @@ class TrainingDatasetRepository:
             if row is None:
                 raise TrainingDatasetConflictError("annotation image missing")
             return _image_dict(row)
+
+    @contextmanager
+    def removing_images(
+        self, dataset_id: int, expected_revision: int,
+        images: Sequence[Mapping[str, object]],
+    ):
+        """Keep index removal and dataset revision guarded until files are archived."""
+        with self._session_factory.begin() as session:
+            changed = session.execute(
+                update(TrainingDataset).where(
+                    TrainingDataset.id == dataset_id,
+                    TrainingDataset.status == "editing",
+                    TrainingDataset.revision == expected_revision,
+                ).values(revision=expected_revision + 1, updated_at=datetime.now(timezone.utc))
+            )
+            if changed.rowcount != 1:
+                raise TrainingDatasetConflictError("dataset revision conflict")
+            for image in images:
+                removed = session.execute(
+                    delete(TrainingDatasetImage).where(
+                        TrainingDatasetImage.dataset_id == dataset_id,
+                        TrainingDatasetImage.id == image["id"],
+                        TrainingDatasetImage.revision == image["revision"],
+                    )
+                )
+                if removed.rowcount != 1:
+                    raise TrainingDatasetConflictError("image revision conflict")
+            yield expected_revision + 1
 
     def delete_editing_version(self, dataset_id: int) -> bool:
         with self._session_factory.begin() as session:

@@ -1,4 +1,4 @@
-import { useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import type { AnnotationBoxInput } from "../../api/types";
 import { boxFromPoints, clampBox, imageToNormalized, normalizedToImage, type Point } from "./annotationGeometry";
 import { annotationColor } from "./annotationColors";
@@ -9,13 +9,20 @@ export function AnnotationCanvas({ src, width, height, boxes, classes, activeCla
   const surface = useRef<SVGSVGElement>(null);
   const [start, setStart] = useState<Point | null>(null);
   const [current, setCurrent] = useState<Point | null>(null);
+  useEffect(() => { setStart(null); setCurrent(null); }, [src, width, height]);
   const point = (event: PointerEvent<SVGSVGElement>) => {
     const rect = surface.current!.getBoundingClientRect();
-    return { x: (event.clientX - rect.left) * width / rect.width, y: (event.clientY - rect.top) * height / rect.height };
+    // Match the SVG viewBox's centered, uniform scaling (including letterboxing).
+    const scale = Math.min(rect.width / width, rect.height / height);
+    const left = rect.left + (rect.width - width * scale) / 2;
+    const top = rect.top + (rect.height - height * scale) / 2;
+    return { x: (event.clientX - left) / scale, y: (event.clientY - top) / scale };
   };
   const pointerDown = (event: PointerEvent<SVGSVGElement>) => {
     if (readOnly) return;
-    const next = point(event); setStart(next); setCurrent(next);
+    const next = point(event);
+    if (!Number.isFinite(next.x) || !Number.isFinite(next.y) || next.x < 0 || next.x > width || next.y < 0 || next.y > height) return;
+    setStart(next); setCurrent(next);
     surface.current?.setPointerCapture?.(event.pointerId);
   };
   const pointerMove = (event: PointerEvent<SVGSVGElement>) => { if (start) setCurrent(point(event)); };
@@ -25,8 +32,8 @@ export function AnnotationCanvas({ src, width, height, boxes, classes, activeCla
     if (candidate) onChange([...boxes, imageToNormalized({ ...candidate, class_id: activeClass }, { width, height })]);
     setStart(null); setCurrent(null);
   };
-  const draft = start && current ? boxFromPoints(start, current) : null;
-  return <svg ref={surface} className="annotation-canvas" aria-label="图片标注画布" role="img" viewBox={`0 0 ${width} ${height}`} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp}>
+  const draft = start && current ? clampBox(boxFromPoints(start, current), { width, height }, 0) : null;
+  return <svg ref={surface} className="annotation-canvas" aria-label="图片标注画布" role="img" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={() => { setStart(null); setCurrent(null); }}>
     <image href={src} x="0" y="0" width={width} height={height} preserveAspectRatio="xMidYMid meet" />
     {boxes.map((box, index) => {
       const pixel = normalizedToImage(box, { width, height });

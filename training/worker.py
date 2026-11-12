@@ -21,6 +21,8 @@ from training.contracts import (
     extract_evaluation_analysis,
 )
 from training.configuration import evaluate_acceptance
+from training.runtime import RuntimeRecorder
+from training.preset_evidence import validation_operating_points
 from training.train import PROJECT_ROOT, configure_runtime, resolve_device
 
 
@@ -199,6 +201,9 @@ def _effective_config(manifest: TrainingManifest) -> dict[str, object]:
             "patience": manifest.patience,
         },
         "advanced_config": manifest.advanced_config,
+        "provenance": manifest.provenance,
+        "dataset_classes": list(manifest.dataset_classes),
+        "resumed": manifest.resume_checkpoint is not None,
     }
 
 
@@ -257,6 +262,7 @@ def _execute_manifest(
             raise WorkerFailure("weights_unavailable", "load")
 
         def on_train_epoch_end(trainer) -> None:
+            recorder.capture(trainer)
             progress = TrainingProgress(
                 current_epoch=min(int(trainer.epoch) + 1, manifest.epochs),
                 total_epochs=manifest.epochs,
@@ -264,6 +270,12 @@ def _execute_manifest(
             )
             atomic_write_json(run_dir / "progress.json", progress.to_json())
 
+        requested = _effective_config(manifest)
+        weights_source = Path(model_reference)
+        requested["base_model_sha256"] = _sha256(weights_source) if weights_source.is_file() else None
+        recorder = RuntimeRecorder(run_dir / "effective_config.json", requested)
+        model.add_callback("on_train_start", recorder.capture)
+        model.add_callback("on_train_end", recorder.capture)
         model.add_callback("on_fit_epoch_end", on_train_epoch_end)
         try:
             train_arguments = dict(
@@ -285,9 +297,7 @@ def _execute_manifest(
                 train_arguments["save_dir"] = str(
                     _contained(run_dir / "train", run_dir)
                 )
-            atomic_write_json(
-                run_dir / "effective_config.json", _effective_config(manifest)
-            )
+            recorder.write()
             model.train(**train_arguments)
             best_path = _copy_canonical_weights(run_dir)
             _copy_results_curve(run_dir)
@@ -302,6 +312,16 @@ def _execute_manifest(
 
         try:
             evaluation_model = yolo_cls(str(best_path))
+            validation_metrics = evaluation_model.val(
+                data=manifest.dataset_yaml, split="val", imgsz=manifest.imgsz,
+                batch=_evaluation_batch(batch, model.trainer), device=device, workers=0,
+                project=manifest.run_dir, name="validation", exist_ok=True, plots=True,
+            )
+            atomic_write_json(run_dir / "validation.json", {
+                "schema_version": 1, "split": "val", "best_sha256": _sha256(best_path),
+                "metrics": extract_metrics(validation_metrics),
+                "precision_recall": validation_operating_points(validation_metrics),
+            })
             raw_metrics = evaluation_model.val(
                 data=manifest.dataset_yaml,
                 split="test",

@@ -217,6 +217,9 @@ def test_create_persists_complete_advanced_and_acceptance_snapshots(service_cont
             encoding="utf-8"
         )
     )
+    assert manifest["provenance"]["dataset_manifest_digest"] == "d" * 64
+    assert manifest["provenance"]["training_profile"] == created["training_profile"]
+    assert manifest["provenance"]["profile_version"] == 2
     assert manifest["advanced_config"] == created["advanced_config"]
     assert manifest["acceptance_config"] == created["acceptance_config"]
 

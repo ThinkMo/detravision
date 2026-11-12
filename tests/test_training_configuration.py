@@ -23,7 +23,7 @@ def test_basic_mode_expands_to_complete_balanced_snapshot():
     )
 
     assert CONFIG_SCHEMA_VERSION == 1
-    assert PROFILE_VERSION == 1
+    assert PROFILE_VERSION == 2
     assert result["optimizer"] == "auto"
     assert result["workers"] == 0
     assert result["deterministic"] is True
@@ -208,9 +208,10 @@ def test_catalog_describes_every_field_and_profile_for_catalog_driven_forms():
         "training_profiles",
         "advanced_config_schema",
         "acceptance_schema",
+        "base_defaults",
     }
     assert catalog["config_schema_version"] == 1
-    assert catalog["profile_version"] == 1
+    assert catalog["profile_version"] == 2
     assert {profile["id"] for profile in catalog["training_profiles"]} == {
         "balanced",
         "small_object",
@@ -391,3 +392,38 @@ def test_acceptance_evaluates_all_enabled_thresholds_in_stable_order():
         "threshold_met",
         "threshold_met",
     ]
+
+
+@pytest.mark.parametrize("profile", ["high_recall", "stable_finetune", "custom"])
+def test_manual_adamw_starts_bias_warmup_from_zero_unless_explicit(profile):
+    """Catches SGD bias warmup being inherited by a low-LR AdamW run."""
+    result = resolve_training_config(
+        mode="advanced", profile=profile, overrides={"optimizer": "AdamW"}, epochs=100,
+    )
+    assert result["warmup_bias_lr"] == 0.0
+    explicit = resolve_training_config(
+        mode="advanced", profile=profile,
+        overrides={"optimizer": "AdamW", "warmup_bias_lr": 0.003}, epochs=100,
+    )
+    assert explicit["warmup_bias_lr"] == 0.003
+
+
+def test_complete_historical_snapshot_keeps_original_adamw_warmup_on_resume():
+    """Catches new optimizer defaults rewriting an already saved training run."""
+    snapshot = resolve_training_config(
+        mode="advanced", profile="high_recall", overrides=None, epochs=100,
+    )
+    snapshot["warmup_bias_lr"] = 0.1
+    restored = resolve_training_config(
+        mode="advanced", profile="custom", overrides=snapshot, epochs=100,
+    )
+    assert restored == snapshot
+
+
+@pytest.mark.parametrize("optimizer", [[], {}, ["AdamW"]])
+def test_invalid_optimizer_containers_return_field_errors(optimizer):
+    """Catches warmup normalization bypassing type validation with a TypeError."""
+    with pytest.raises(TrainingConfigError) as captured:
+        resolve_training_config(mode="advanced", profile="custom",
+                                overrides={"optimizer": optimizer}, epochs=100)
+    assert captured.value.field_errors == {"optimizer": ["invalid_type"]}

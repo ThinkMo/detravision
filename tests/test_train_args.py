@@ -24,6 +24,9 @@ class FakeYOLO:
         self.val_calls = []
         self.__class__.instances.append(self)
 
+    def add_callback(self, name, callback):
+        pass
+
     def train(self, **kwargs):
         self.train_calls.append(kwargs)
         return "trained"
@@ -55,15 +58,15 @@ def test_train_defaults_are_current_and_windows_safe():
     assert args.command == "train"
     assert args.data == "training/configs/construction-ppe-helmet.yaml"
     assert args.model == "yolo11n.pt"
-    assert args.epochs == 50
-    assert args.imgsz == 512
-    assert args.batch == 4
+    assert args.epochs == 100
+    assert args.imgsz == 640
+    assert args.batch == -1
     assert args.device == "auto"
     assert args.workers == 0
     assert args.cache is False
     assert args.project == "runs/detect"
     assert args.name is None
-    assert args.patience == 100
+    assert args.patience == 50
     assert args.seed == 0
 
 
@@ -256,3 +259,49 @@ def test_main_reports_runtime_failure(tmp_path, capsys):
     )
     assert code == 1
     assert "train failed: CUDA failed" in capsys.readouterr().err
+
+
+def test_train_auto_batch_and_catalog_defaults_reach_the_training_boundary():
+    """Catches CLI and Web using different baseline or AutoBatch semantics."""
+    from training.configuration import catalog_schema
+    defaults = catalog_schema()["base_defaults"]
+    args = parse_args(["train", "--batch", "auto"])
+    kwargs = train_kwargs(args, 0)
+    assert kwargs["batch"] == -1
+    assert args.model == defaults["base_model"] == "yolo11n.pt"
+    assert (kwargs["imgsz"], kwargs["epochs"], kwargs["patience"]) == (
+        defaults["imgsz"], defaults["epochs"], defaults["patience"],
+    )
+
+
+def test_cli_writes_requested_and_runtime_config_in_the_actual_run_directory(tmp_path):
+    """Catches standalone CLI runs missing the same provenance as Web jobs."""
+    import json
+    import torch
+
+    class RecordingYOLO(FakeYOLO):
+        def __init__(self, model):
+            super().__init__(model)
+            self.callbacks = {}
+
+        def add_callback(self, name, callback):
+            self.callbacks[name] = callback
+
+        def train(self, **kwargs):
+            trainer = SimpleNamespace(
+                args=SimpleNamespace(**kwargs), save_dir=tmp_path / "actual-run",
+                optimizer=torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=0.01),
+                batch_size=4, device=torch.device("cpu"), epoch=0,
+            )
+            self.callbacks["on_train_start"](trainer)
+            return "trained"
+
+    data = tmp_path / "dataset.yaml"
+    data.write_text("names: [fire]", encoding="utf-8")
+    args = parse_args(["train", "--data", str(data)])
+    execute(args, yolo_cls=RecordingYOLO, cuda_available=lambda: False, project_root=tmp_path)
+    record = json.loads((tmp_path / "actual-run" / "effective_config.json").read_text("utf-8"))
+    assert record["base"]["batch"] == "auto"
+    assert record["runtime"]["batch"] == 4
+    assert record["runtime"]["optimizer"]["name"] == "SGD"
+    assert str(tmp_path) not in json.dumps(record)

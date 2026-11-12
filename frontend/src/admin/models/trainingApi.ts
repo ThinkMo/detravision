@@ -1,5 +1,5 @@
 import { api } from "../../api/client";
-import type { AnnotationBoxInput, DatasetValidationReport, ModelVersion, TrainingCatalog, TrainingDataset, TrainingDatasetImage, TrainingDatasetImageDetail, TrainingDatasetImagePage, TrainingDatasetInput, TrainingEffectAnalysis, TrainingJob, TrainingJobCreate, TrainingJobDetail, TrainingJobPage } from "../../api/types";
+import type { AnnotationBoxInput, DatasetValidationReport, ModelVersion, TrainingCatalog, TrainingDataset, TrainingDatasetImage, TrainingDatasetImageDetail, TrainingDatasetImagePage, TrainingDatasetInput, TrainingEffectAnalysis, TrainingEffectiveConfig, TrainingJob, TrainingJobCreate, TrainingJobDetail, TrainingJobPage } from "../../api/types";
 
 function idempotencyKey() {
   return globalThis.crypto.randomUUID();
@@ -31,6 +31,7 @@ export const trainingApi = {
   detail: (id: number) => api.request<TrainingJobDetail>(`/api/training-jobs/${id}`),
   cloneTemplate: (id: number) => api.request<TrainingJobCreate>(`/api/training-jobs/${id}/clone-template`),
   log: (url: string) => api.requestText(url),
+  effectiveConfig: (url: string) => api.request<TrainingEffectiveConfig>(url),
   analysis: (url: string) => api.request<TrainingEffectAnalysis>(url),
   datasetRoots: () => api.request<{ items: Array<{ alias: string }> }>("/api/training/dataset-roots"),
   datasetDirectories: (rootAlias: string, path: string) => api.request<{ items: Array<{ name: string; path: string }> }>(`/api/training/dataset-directories?root_alias=${encodeURIComponent(rootAlias)}&path=${encodeURIComponent(path)}`),
@@ -41,9 +42,10 @@ export const trainingApi = {
   cloneDataset: (id: number) => api.request<TrainingDataset>(`/api/training/datasets/${id}/versions`, { method: "POST" }),
   datasetVersions: (id: number) => api.request<{ items: TrainingDataset[] }>(`/api/training/datasets/${id}/versions`),
   rescanDataset: (id: number, split: "train" | "val" | "test" | null = null) => api.request<{ created: number; updated: number; removed: number }>(`/api/training/datasets/${id}/rescan`, { method: "POST", body: JSON.stringify({ split }) }),
-  datasetImages: (id: number, split: "train" | "val" | "test", status?: string, page = 1) => api.request<TrainingDatasetImagePage>(`/api/training/datasets/${id}/images?split=${split}&page=${page}&page_size=50${status ? `&status=${encodeURIComponent(status)}` : ""}`),
+  datasetImages: (id: number, split: "train" | "val" | "test", status?: string, page = 1, pageSize = 50) => api.request<TrainingDatasetImagePage>(`/api/training/datasets/${id}/images?split=${split}&page=${page}&page_size=${pageSize}${status ? `&status=${encodeURIComponent(status)}` : ""}`),
   datasetImage: (datasetId: number, imageId: number) => api.request<TrainingDatasetImageDetail>(`/api/training/datasets/${datasetId}/images/${imageId}`),
   saveAnnotations: (datasetId: number, imageId: number, revision: number, boxes: AnnotationBoxInput[]) => api.request<TrainingDatasetImage>(`/api/training/datasets/${datasetId}/images/${imageId}/annotations`, { method: "PUT", body: JSON.stringify({ revision, boxes }) }),
+  removeDatasetImages: (datasetId: number, revision: number, images: Array<{ id: number; revision: number }>) => api.request<{ removed: number; image_ids: number[]; dataset_revision: number }>(`/api/training/datasets/${datasetId}/images/remove`, { method: "POST", body: JSON.stringify({ revision, images }) }),
   confirmEmpty: (datasetId: number, imageId: number, revision: number) => api.request<TrainingDatasetImageDetail>(`/api/training/datasets/${datasetId}/images/${imageId}/confirm-empty`, { method: "POST", body: JSON.stringify({ revision }) }),
   validateDataset: (id: number) => api.request<DatasetValidationReport>(`/api/training/datasets/${id}/validate`, { method: "POST" }),
   publishDataset: (id: number, revision: number, confirmWarnings: boolean) => api.request<TrainingDataset>(`/api/training/datasets/${id}/publish`, { method: "POST", body: JSON.stringify({ revision, confirm_warnings: confirmWarnings }) }),

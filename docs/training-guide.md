@@ -259,7 +259,7 @@ RAM 缓存、CPU 上运行 m/l/x、960 输入或 l/x 模型会显示资源风险
 
 ## 8. 开始正式训练
 
-本项目在 Windows 上使用保守配置，避免多进程数据加载和 RAM 缓存导致页文件不足：
+CLI 与 Web 的默认基线统一为 `yolo11n.pt / 640 / 100 epochs / batch auto / patience 50`，Windows 使用 `workers=0`。以下命令显式选择较轻的 512、50 轮和 batch 4，属于硬件受限时的覆盖示例：
 
 ```powershell
 .\.venv\Scripts\python.exe -m training.train train `
@@ -279,9 +279,10 @@ RAM 缓存、CPU 上运行 m/l/x、960 输入或 l/x 模型会显示资源风险
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `--model` | `yolo11n.pt` | 预训练权重或模型 YAML |
-| `--epochs` | 50 | 总训练轮数 |
-| `--imgsz` | 512 | 方形输入尺寸 |
-| `--batch` | 4 | 每批图片数；显存不足时优先降到 2 或 1 |
+| `--epochs` | 100 | 总训练轮数 |
+| `--imgsz` | 640 | 方形输入尺寸 |
+| `--batch` | `auto` | 自动探测批大小；也可指定正整数，显存不足时降到 2 或 1 |
+| `--patience` | 50 | 验证指标连续不改善的早停轮数 |
 | `--workers` | 0 | Windows 推荐值，避免多进程加载问题 |
 | `--cache` | `false` | 可选 `false`、`disk`、`ram`；本机优先 `false` 或 `disk` |
 | `--device` | `auto` | `auto` 自动选择 GPU 0 或 CPU，也可显式指定 `0`/`cpu` |
@@ -387,3 +388,44 @@ Get-Content training/configs/construction-ppe-helmet.yaml
 6. 保存数据来源、许可、标注规范、转换脚本版本和类别统计。
 
 若数据集同时包含 `fire`、`smoke`，请使用 [safety.yaml](../training/configs/safety.yaml) 的五类定义，并确保所有标签 ID 与该配置完全一致；不要把三类安全帽标签直接与五类标签混用。
+
+
+## 14. 实际配置与专项预设验证
+
+均衡预设保留 Ultralytics 通用默认参数。预设版本升级为 2：新建任务选择手动 Adam/AdamW 且未明确覆盖偏置预热值时，使用 `warmup_bias_lr=0`；已保存的完整配置和续训继续使用原值。专项预设是待验证的实验起点，不代表已经证实能提高效果。
+
+新任务的 `effective_config.json` 分别记录：
+
+- `base`、`advanced_config`：不可变的请求快照，auto 参数可能被训练器忽略；
+- `runtime`：优化器初始化后观测到的批大小、设备、优化器、初始学习率、动量、各参数组初始/当前学习率与衰减值；
+- `versions`：Python、Ultralytics、PyTorch 和 CUDA 构建版本；
+- 数据集摘要、起始权重摘要、类别顺序、预设版本和是否续训。
+
+初始化失败时 `runtime=null`，不把请求值伪装成实际值。旧记录不会自动补写。CLI 训练和续训也会在实际训练输出目录生成配置记录；CLI 自由数据路径缺少已发布数据集的 provenance，不能直接用于严格预设证据对比。
+
+控制台详情提供实际配置展示和下载。auto 模式下学习率、动量和偏置预热输入被禁用；改成手动优化器后可编辑。续训记录中的初始学习率来自原训练调度，不能解释成新实验的初始学习率。
+
+今后 worker 完成训练后先用 `best.pt` 在 **val split** 上保存 `validation.json`，再按原流程执行 test 验收。验证制品包含总体/逐类 mAP50-95，以及 IoU=0.5 的 Precision/Recall 随置信度变化数据；置信度网格最多保留 201 点，固定精确率门槛下的召回为此网格上的近似值。不存在可达门槛或类别曲线缺失时结果为 null。
+
+后续进行专项预设对比时：
+
+1. 使用同一个已发布数据集版本、同一份起始权重、同一环境和固定 batch（例如 4）。
+2. 每个候选预设与 balanced 配对使用相同种子，建议至少 `0、1、2`；epochs 和 patience 必须手动统一，排除不同训练预算的影响。工具允许输入尺寸变化，因此报告比较的是预设整体；要单独分析增强，请把输入尺寸也固定。
+3. 每条任务从同一权重新建，续训不进入该对比。稳定微调预设当前仍使用平台允许的基础模型；已有领域模型导入另行实现。
+4. 在运行目录中收集 `effective_config.json` 和 `validation.json`。然后执行以下只读分析命令；它不会启动训练，也不会加载模型：
+
+```powershell
+.\.venv\Scripts\python.exe -m training.preset_evidence `
+  data/training-runs/run-<balanced-seed0> `
+  data/training-runs/run-<candidate-seed0> `
+  data/training-runs/run-<balanced-seed1> `
+  data/training-runs/run-<candidate-seed1> `
+  data/training-runs/run-<balanced-seed2> `
+  data/training-runs/run-<candidate-seed2> `
+  --precision-floor 0.85 `
+  --out runs/preset-validation-report.json
+```
+
+工具拒绝不同数据集/起始权重/版本/预算/批大小/设备环境、重复或未配对种子、续训以及 test split。报告给出总体和逐类 mAP50-95 的均值、样本标准差、相对 balanced 的配对均值差，以及逐类精确率至少达到 0.85 时的最高召回。少于三个种子标记 `insufficient_seeds`；三个以上只标记数据已收集，不自动宣称预设有效。预设和上线阈值在验证集上选择，test 集留作最终独立验收。
+
+本次只实现记录、对比工具和代码回归测试，**尚未执行真实训练，也未产生专项预设效果证据**。

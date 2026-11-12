@@ -24,6 +24,7 @@ ARTIFACTS = {
     "precision_curve": "P_curve.png",
     "recall_curve": "R_curve.png",
     "effective_config": "effective_config.json",
+    "validation": "validation.json",
 }
 
 _RUN_KEY = re.compile(r"run-[0-9a-f]{32}\Z")

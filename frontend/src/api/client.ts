@@ -1,9 +1,10 @@
-import type { ApiErrorBody } from "./types";
+import type { ApiErrorBody, DatasetValidationReport } from "./types";
 
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string | null;
   readonly fieldErrors: Record<string, string[]> | null;
+  readonly validation: DatasetValidationReport | null;
 
   constructor(status: number, body: ApiErrorBody = {}) {
     super(body.message ?? body.detail ?? `请求失败（${status}）`);
@@ -11,6 +12,7 @@ export class ApiError extends Error {
     this.status = status;
     this.code = body.code ?? null;
     this.fieldErrors = body.field_errors ?? null;
+    this.validation = body.validation ?? null;
   }
 }
 

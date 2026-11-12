@@ -15,9 +15,10 @@ from .dataset_repository import TrainingDatasetConflictError, TrainingDatasetRep
 
 
 class DatasetValidationError(Exception):
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, report: DatasetValidationReport | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.report = report
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,9 +160,9 @@ class DatasetValidator:
             raise DatasetValidationError("dataset_published")
         report = self.validate(dataset_id)
         if report.errors or report.digest is None:
-            raise DatasetValidationError("dataset_validation_failed")
+            raise DatasetValidationError("dataset_validation_failed", report)
         if report.warnings and not confirm_warnings:
-            raise DatasetValidationError("dataset_warnings_unconfirmed")
+            raise DatasetValidationError("dataset_warnings_unconfirmed", report)
         directory = self._filesystem.dataset_path(dataset)
         manifest = directory / ".dataset-manifest.json"
         old = manifest.read_bytes() if manifest.is_file() else None

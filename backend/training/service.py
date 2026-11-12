@@ -15,6 +15,7 @@ from backend.db.repositories import Repository
 from training.contracts import TrainingManifest, atomic_write_json
 from training.configuration import (
     CONFIG_SCHEMA_VERSION,
+    PROFILE_VERSION,
     TrainingConfigError,
     normalize_acceptance_config,
 )
@@ -103,6 +104,7 @@ class TrainingService:
                 run_dir,
                 dataset_yaml=dataset_yaml,
                 dataset_classes=dataset["classes"],
+                dataset_manifest_digest=dataset.get("manifest_digest"),
                 acceptance_config=acceptance_config,
             )
             atomic_write_json(run_dir / "manifest.json", manifest.to_json())
@@ -305,6 +307,7 @@ class TrainingService:
                 run_dir,
                 dataset_yaml=dataset_yaml.resolve(),
                 dataset_classes=source["dataset_classes"],
+                dataset_manifest_digest=source.get("dataset_manifest_digest"),
                 acceptance_config=source["acceptance_config"],
                 resume_checkpoint=resume_checkpoint.resolve(),
             )
@@ -467,6 +470,7 @@ class TrainingService:
         dataset_yaml: Path,
         dataset_classes: list[str],
         acceptance_config: Mapping[str, object],
+        dataset_manifest_digest: object = None,
         resume_checkpoint: Path | None = None,
     ) -> TrainingManifest:
         return TrainingManifest.from_json(
@@ -481,6 +485,9 @@ class TrainingService:
                 "device": request.device,
                 "patience": request.patience,
                 "config_schema_version": CONFIG_SCHEMA_VERSION,
+                "provenance": {"dataset_manifest_digest": dataset_manifest_digest,
+                               "training_profile": request.profile,
+                               "profile_version": PROFILE_VERSION if resume_checkpoint is None else None},
                 "dataset_classes": list(dataset_classes),
                 "advanced_config": dict(request.advanced_config or {}),
                 "acceptance_config": dict(acceptance_config),

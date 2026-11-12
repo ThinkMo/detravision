@@ -221,3 +221,10 @@ class DatasetClassRenameRequest(RevisionRequest):
 
 class DatasetPublishRequest(RevisionRequest):
     confirm_warnings: bool = False
+
+class DatasetImageRemovalItem(RevisionRequest):
+    id: int = Field(gt=0, strict=True)
+
+
+class DatasetImagesRemoveRequest(RevisionRequest):
+    images: list[DatasetImageRemovalItem] = Field(min_length=1, max_length=100)

@@ -8,7 +8,11 @@ from typing import Any
 
 
 CONFIG_SCHEMA_VERSION = 1
-PROFILE_VERSION = 1
+PROFILE_VERSION = 2
+BASE_DEFAULTS = MappingProxyType({
+    "base_model": "yolo11n.pt", "imgsz": 640, "epochs": 100,
+    "batch": "auto", "device": "auto", "patience": 50,
+})
 
 _METRICS = ("precision", "recall", "map50", "map50_95")
 
@@ -36,12 +40,12 @@ class _Field:
 _FIELDS = MappingProxyType(
     {
         "optimizer": _Field(
-            "string", "auto", "优化器", "选择用于更新模型权重的优化算法。",
+            "string", "auto", "优化器", "auto 会自动选择优化器，并忽略 lr0、momentum 和偏置预热学习率的请求值。",
             choices=("auto", "SGD", "Adam", "AdamW"),
         ),
-        "lr0": _Field("number", 0.01, "初始学习率", "训练开始时的学习率。", 0.000001, 0.1),
+        "lr0": _Field("number", 0.01, "初始学习率", "手动优化器的初始学习率；auto 模式由训练器决定。", 0.000001, 0.1),
         "lrf": _Field("number", 0.01, "最终学习率比例", "最终学习率相对初始学习率的比例。", 0.01, 1.0),
-        "momentum": _Field("number", 0.937, "动量", "优化器的动量或 Adam beta1。", 0.6, 0.98),
+        "momentum": _Field("number", 0.937, "动量", "手动优化器的动量或 Adam beta1；auto 模式由训练器决定。", 0.6, 0.98),
         "weight_decay": _Field("number", 0.0005, "权重衰减", "用于抑制过拟合的 L2 正则强度。", 0.0, 0.1),
         "warmup_epochs": _Field("number", 3.0, "预热轮数", "逐步提升学习率的训练轮数。", 0.0, 20.0),
         "warmup_momentum": _Field("number", 0.8, "预热动量", "预热阶段使用的初始动量。", 0.0, 0.95),
@@ -77,9 +81,9 @@ _PROFILE_OVERRIDES = MappingProxyType(
     {
         "balanced": MappingProxyType({}),
         "small_object": MappingProxyType({"translate": 0.15, "scale": 0.7, "mixup": 0.05}),
-        "high_recall": MappingProxyType({"optimizer": "AdamW", "lr0": 0.001, "cls": 0.75, "mixup": 0.1}),
+        "high_recall": MappingProxyType({"optimizer": "AdamW", "lr0": 0.001, "cls": 0.75, "mixup": 0.1, "warmup_bias_lr": 0.0}),
         "stable_finetune": MappingProxyType(
-            {"optimizer": "AdamW", "lr0": 0.001, "warmup_epochs": 1.0, "freeze": 10, "mosaic": 0.2, "scale": 0.25}
+            {"optimizer": "AdamW", "lr0": 0.001, "warmup_epochs": 1.0, "warmup_bias_lr": 0.0, "freeze": 10, "mosaic": 0.2, "scale": 0.25}
         ),
         "custom": MappingProxyType({}),
     }
@@ -87,9 +91,9 @@ _PROFILE_OVERRIDES = MappingProxyType(
 
 _PROFILE_METADATA = (
     ("balanced", "均衡", "通用默认基线。", 640, 100, 50),
-    ("small_object", "小目标", "适合远处或小尺寸目标。", 960, 100, 50),
-    ("high_recall", "高召回", "优先降低重点类别漏检。", 640, 150, 75),
-    ("stable_finetune", "稳定微调", "使用较低学习率微调已有领域模型。", 640, 50, 20),
+    ("small_object", "小目标", "小目标实验起点；效果待验证集对比，不保证提升。", 960, 100, 50),
+    ("high_recall", "高召回", "召回优化实验起点；效果待验证集对比，不保证提升。", 640, 150, 75),
+    ("stable_finetune", "稳定微调", "微调实验起点；前 10 层全程冻结，效果待验证集对比。", 640, 50, 20),
     ("custom", "自定义", "从均衡配置开始自定义参数。", 640, 100, 50),
 )
 
@@ -128,6 +132,7 @@ def catalog_schema() -> dict[str, object]:
     return {
         "config_schema_version": CONFIG_SCHEMA_VERSION,
         "profile_version": PROFILE_VERSION,
+        "base_defaults": dict(BASE_DEFAULTS),
         "training_profiles": [
             {
                 "id": profile,
@@ -220,6 +225,8 @@ def resolve_training_config(
         _add_error(errors, str(name), "unknown_field")
     values = {**_BALANCED, **_PROFILE_OVERRIDES[selected]}
     values.update({name: value for name, value in supplied.items() if name in _FIELDS})
+    if values["optimizer"] in ("Adam", "AdamW") and "warmup_bias_lr" not in supplied:
+        values["warmup_bias_lr"] = 0.0
     normalized = {
         name: _validate_field(name, values[name], spec, errors)
         for name, spec in _FIELDS.items()

@@ -184,9 +184,13 @@ class DatasetService:
             item for key, item in found.items() if key not in existing
         ]
         if discovered:
-            self._repository.upsert_image_index(
-                dataset_id, [self._scan_values(item) for item in discovered]
-            )
+            try:
+                self._repository.upsert_image_index(
+                    dataset_id, [self._scan_values(item) for item in discovered],
+                    expected_revision=dataset["revision"],
+                )
+            except TrainingDatasetConflictError as exc:
+                raise DatasetServiceError("dataset_conflict") from exc
         changed = 0
         missing = 0
         for key, current in existing.items():
@@ -263,6 +267,7 @@ class DatasetService:
         dataset_path = self._contained(root, root / validated["directory"])
         return {
             "key": key,
+            "manifest_digest": row.get("manifest_digest"),
             "training_dataset_id": dataset_id,
             "path": dataset_path,
             "train": validated["train_split"],

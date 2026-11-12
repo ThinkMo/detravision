@@ -38,7 +38,7 @@ function JobConfiguration({ job }: { job: TrainingJobDetailType }) {
     ...Object.entries(acceptance?.classes ?? {}).flatMap(([className, metrics]) => Object.entries(metrics).filter((entry) => entry[1] != null).map(([metric, value]) => ({ label: `${className} ${metric}`, value }))),
   ];
   return <div className="training-detail-config">
-    <h3>训练配置</h3>
+    <h3>请求训练配置</h3>
     <dl><div><dt>训练集</dt><dd>{job.dataset_key ?? "—"}</dd></div><div><dt>基础模型</dt><dd>{job.base_model}</dd></div><div><dt>输入尺寸</dt><dd>{job.imgsz}</dd></div><div><dt>轮次</dt><dd>{job.epochs}</dd></div><div><dt>批次</dt><dd>{job.batch}</dd></div><div><dt>设备</dt><dd>{job.device}</dd></div><div><dt>早停耐心</dt><dd>{job.patience}</dd></div><div><dt>预设</dt><dd>{job.training_profile === "legacy" || !job.training_profile ? "传统默认配置" : job.training_profile}</dd></div><div><dt>Schema</dt><dd>v{job.config_schema_version ?? 1}</dd></div>{advanced.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{String(value)}</dd></div>)}</dl>
     <h3>验收配置</h3>
     {thresholds.length ? <dl>{thresholds.map((threshold) => <div key={threshold.label}><dt>{threshold.label}</dt><dd>{percent(threshold.value)}</dd></div>)}</dl> : <p>未设置验收门槛。</p>}
@@ -51,12 +51,29 @@ export function TrainingJobDetail({ jobId, onClone, onClose, supportedConfigVers
   const query = useQuery({ queryKey: ["admin", "training-jobs", jobId], queryFn: () => trainingApi.detail(jobId) });
   const logUrl = query.data?.log_url ?? "";
   const analysisUrl = query.data?.analysis_url ?? "";
+  const configUrl = query.data?.effective_config_url ?? "";
+  const effective = useQuery({
+    queryKey: ["admin", "training-jobs", jobId, "effective-config", configUrl],
+    queryFn: () => trainingApi.effectiveConfig(configUrl), enabled: Boolean(configUrl), retry: false,
+    refetchInterval: query.data?.status === "running" ? 5000 : false,
+  });
+  const runtime = effective.data?.runtime;
   const log = useQuery({ queryKey: ["admin", "training-jobs", jobId, "log", logUrl], queryFn: () => trainingApi.log(logUrl), enabled: Boolean(logUrl) });
   const analysis = useQuery({ queryKey: ["admin", "training-jobs", jobId, "analysis", analysisUrl], queryFn: () => trainingApi.analysis(analysisUrl), enabled: Boolean(analysisUrl) });
   return <ModalDialog title={`训练任务 #${jobId}`} onClose={onClose} className="training-detail-dialog">
     {query.isLoading ? <LoadingPanel label="正在加载训练详情" /> : query.isError || !query.data ? <ErrorPanel message="无法读取训练详情" onRetry={() => void query.refetch()} /> : <>
       <TrainingMetricsSummary job={query.data} />
       <JobConfiguration job={query.data} />
+      <div className="training-detail-config">
+        <h3>实际训练配置</h3>
+        {runtime ? <>
+          <dl><div><dt>实际优化器</dt><dd>{runtime.optimizer.name}</dd></div><div><dt>实际初始学习率</dt><dd>{String(runtime.advanced_config.lr0 ?? "—")}</dd></div><div><dt>实际批次</dt><dd>{runtime.batch ?? "—"}</dd></div><div><dt>实际设备</dt><dd>{runtime.device ?? "—"}</dd></div></dl>
+          <p>环境：{Object.entries(runtime.versions).filter(([, value]) => value).map(([name, value]) => `${name} ${value}`).join(" · ")}</p>
+          <p>完整记录包含各参数组的初始和当前学习率；续训的初始学习率沿用原训练调度。</p>
+        </> : <p>{effective.isLoading && configUrl ? "正在加载实际配置" : effective.isError || !configUrl || (effective.data && !Object.hasOwn(effective.data, "runtime")) ? "此任务没有可用的实际配置记录。" : "优化器初始化后显示实际配置。"}</p>}
+        {configUrl ? <a href={configUrl} download>下载实际配置记录</a> : null}
+        {query.data.validation_url ? <p><a href={query.data.validation_url} download>下载验证集对比数据</a></p> : null}
+      </div>
       {analysis.data && Object.keys(analysis.data.classes).length ? <div className="training-effect-analysis"><h3>置信度与误检漏检分析</h3><div className="admin-table-wrap"><table className="admin-table" aria-label="置信度与误检漏检分析"><thead><tr><th>类别</th><th>建议置信度</th><th>最佳 F1</th><th>误检</th><th>漏检</th></tr></thead><tbody>{Object.entries(analysis.data.classes).map(([name, value]) => <tr key={name}><td>{name}</td><td>{percent(value.recommended_confidence)}</td><td>{percent(value.best_f1)}</td><td>{value.false_positives ?? "—"}</td><td>{value.false_negatives ?? "—"}</td></tr>)}</tbody></table></div><p className="training-form__status">建议置信度来自测试集 F1 峰值；上线阈值仍应结合漏检成本调整。</p></div> : null}
       {query.data.confusion_matrix_url ? <img className="training-artifact" src={query.data.confusion_matrix_url} alt="测试集混淆矩阵" /> : null}
       {query.data.results_curve_url ? <img className="training-artifact" src={query.data.results_curve_url} alt="训练结果曲线" /> : null}

@@ -155,6 +155,7 @@ export interface TrainingCatalog {
   default_dataset_key: string | null;
   config_schema_version?: number;
   profile_version?: number;
+  base_defaults?: { base_model: string; imgsz: 640 | 960; epochs: number; batch: TrainingJobCreate["batch"]; device: TrainingJobCreate["device"]; patience: number };
   training_profiles?: TrainingProfileCatalogItem[];
   advanced_config_schema?: {
     groups: Array<{ id: string; label: string; fields: string[] }>;
@@ -268,6 +269,8 @@ export interface TrainingJobDetail extends TrainingJob {
   acceptance_config?: TrainingAcceptanceConfig | null;
   acceptance_checks?: TrainingAcceptanceCheck[] | null;
   results_curve_url?: string | null;
+  effective_config_url?: string | null;
+  validation_url?: string | null;
   analysis_url?: string | null;
   evaluation_curve_urls?: Partial<Record<"pr" | "f1" | "precision" | "recall", string>>;
 }
@@ -377,4 +380,17 @@ export interface ApiErrorBody {
   message?: string;
   detail?: string;
   field_errors?: Record<string, string[]>;
+  validation?: DatasetValidationReport;
+}
+
+
+export interface TrainingEffectiveConfig {
+  runtime: {
+    batch: number | null;
+    device: string | null;
+    epoch: number | null;
+    versions: Record<string, string | null>;
+    advanced_config: Record<string, string | number | boolean>;
+    optimizer: { name: string; param_groups: Array<{ initial_lr?: number; lr?: number; weight_decay?: number }> };
+  } | null;
 }

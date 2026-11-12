@@ -61,7 +61,7 @@ def test_catalog_exposes_versioned_advanced_training_contract(tmp_path: Path):
     catalog = training_catalog(make_settings(tmp_path))
 
     assert catalog["config_schema_version"] == 1
-    assert catalog["profile_version"] == 1
+    assert catalog["profile_version"] == 2
     assert [profile["id"] for profile in catalog["training_profiles"]] == [
         "balanced",
         "small_object",
@@ -72,7 +72,7 @@ def test_catalog_exposes_versioned_advanced_training_contract(tmp_path: Path):
     assert catalog["advanced_config_schema"]["fields"]["lr0"] == {
         "type": "number",
         "label": "初始学习率",
-        "help": "训练开始时的学习率。",
+        "help": "手动优化器的初始学习率；auto 模式由训练器决定。",
         "default": 0.01,
         "min": 0.000001,
         "max": 0.1,

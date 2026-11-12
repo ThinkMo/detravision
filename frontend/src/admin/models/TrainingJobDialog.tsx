@@ -2,6 +2,7 @@ import { FormEvent, useMemo, useState } from "react";
 import type { TrainingAcceptanceConfig, TrainingAcceptanceMetric, TrainingAdvancedConfig, TrainingAdvancedFieldDescriptor, TrainingAdvancedValue, TrainingCatalog, TrainingJobCreate, TrainingProfileCatalogItem } from "../../api/types";
 import { ConfirmDialog, ModalDialog } from "../shared";
 
+const DEFAULT_BASE_MODEL = "yolo11n.pt";
 const DEFAULTS = { executor: "local", imgsz: 640, epochs: 100, batch: "auto", device: "auto", patience: 50 } as const;
 const METRIC_LABELS: Record<TrainingAcceptanceMetric, string> = { precision: "精确率", recall: "召回率", map50: "mAP50", map50_95: "mAP50-95" };
 const FALLBACK_ACCEPTANCE: TrainingAcceptanceConfig = { schema_version: 1, overall: { map50: .5 }, classes: {} };
@@ -18,13 +19,13 @@ function parseChoice(value: string, choices: TrainingAdvancedValue[]): TrainingA
   return choices.find((choice) => String(choice) === value) ?? value;
 }
 
-function AdvancedField({ descriptor, value, onChange }: { descriptor: TrainingAdvancedFieldDescriptor; value: TrainingAdvancedValue | ""; onChange: (value: TrainingAdvancedValue | "") => void }) {
+function AdvancedField({ descriptor, value, onChange, disabled = false }: { descriptor: TrainingAdvancedFieldDescriptor; value: TrainingAdvancedValue | ""; onChange: (value: TrainingAdvancedValue | "") => void; disabled?: boolean }) {
   if (descriptor.type === "string" && descriptor.choices?.length) {
     const choices = descriptor.choices ?? [];
     return <label>{descriptor.label}<select aria-label={descriptor.label} value={String(value)} onChange={(event) => onChange(parseChoice(event.target.value, choices))}>{choices.map((choice) => <option key={String(choice)} value={String(choice)}>{choice === false || choice === "false" ? "关闭" : choice === true || choice === "true" ? "开启" : String(choice)}</option>)}</select><small>{descriptor.help}</small></label>;
   }
   if (descriptor.type === "boolean") return <label className="admin-check"><input type="checkbox" aria-label={descriptor.label} checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />{descriptor.label}<small>{descriptor.help}</small></label>;
-  return <label>{descriptor.label}<input aria-label={descriptor.label} type="number" min={descriptor.min} max={descriptor.max} step={descriptor.type === "integer" ? 1 : "any"} value={value as number | ""} onChange={(event) => onChange(event.target.value === "" ? "" : Number(event.target.value))} /><small>{descriptor.help}</small></label>;
+  return <label>{descriptor.label}<input aria-label={descriptor.label} type="number" disabled={disabled} min={descriptor.min} max={descriptor.max} step={descriptor.type === "integer" ? 1 : "any"} value={value as number | ""} onChange={(event) => onChange(event.target.value === "" ? "" : Number(event.target.value))} /><small>{descriptor.help}</small></label>;
 }
 
 function AcceptanceFields({ catalog, datasetClasses, templateId, value, onTemplate, onChange }: { catalog: TrainingCatalog; datasetClasses: string[]; templateId: string; value: TrainingAcceptanceConfig; onTemplate: (id: string) => void; onChange: (value: TrainingAcceptanceConfig) => void }) {
@@ -63,11 +64,12 @@ function validateAdvanced(catalog: TrainingCatalog, values: Record<string, Train
 
 export function TrainingJobDialog({ catalog, initialRequest, pending, error, onClose, onSubmit }: { catalog: TrainingCatalog; initialRequest?: TrainingJobCreate | null; pending: boolean; error: string; onClose: () => void; onSubmit: (value: TrainingJobCreate) => void }) {
   const availableModels = catalog.models.filter((model) => model.available);
-  const preferred = availableModels.some((model) => model.id === "yolo11m.pt") ? "yolo11m.pt" : availableModels[0]?.id ?? "";
+  const defaultModel = catalog.base_defaults?.base_model ?? DEFAULT_BASE_MODEL;
+  const preferred = availableModels.some((model) => model.id === defaultModel) ? defaultModel : availableModels[0]?.id ?? "";
   const profiles = catalogProfiles(catalog);
   const balanced = profiles.find((item) => item.id === "balanced") ?? profiles[0];
   const genericTemplate = catalog.acceptance_schema?.templates.find((item) => item.id === "generic") ?? catalog.acceptance_schema?.templates[0];
-  const [form, setForm] = useState<Omit<TrainingJobCreate, "advanced_config" | "acceptance_config">>(() => initialRequest ? (({ advanced_config: _advanced, acceptance_config: _acceptance, ...base }) => base)(initialRequest) : { ...DEFAULTS, dataset_key: catalog.default_dataset_key ?? "", base_model: preferred, mode: "basic", profile: "balanced", acceptance_template: genericTemplate?.id ?? null });
+  const [form, setForm] = useState<Omit<TrainingJobCreate, "advanced_config" | "acceptance_config">>(() => initialRequest ? (({ advanced_config: _advanced, acceptance_config: _acceptance, ...base }) => base)(initialRequest) : { ...DEFAULTS, ...catalog.base_defaults, dataset_key: catalog.default_dataset_key ?? "", base_model: preferred, mode: "basic", profile: "balanced", acceptance_template: genericTemplate?.id ?? null });
   const [advancedOverrides, setAdvancedOverrides] = useState<Record<string, TrainingAdvancedValue | "">>(() => Object.fromEntries(Object.entries(initialRequest?.advanced_config ?? {}).filter((entry): entry is [string, TrainingAdvancedValue] => entry[1] !== undefined)));
   const [acceptance, setAcceptance] = useState(() => cloneAcceptance(initialRequest?.acceptance_config ?? genericTemplate?.config));
   const [confirmRisk, setConfirmRisk] = useState<"cpu" | "heavy" | "ram" | null>(null);
@@ -76,7 +78,9 @@ export function TrainingJobDialog({ catalog, initialRequest, pending, error, onC
   const size = useMemo(() => form.base_model.replace(".pt", "").slice(-1), [form.base_model]);
   const resolvedAdvanced = useMemo(() => {
     const defaults = Object.fromEntries(Object.entries(catalog.advanced_config_schema?.fields ?? {}).map(([name, field]) => [name, field.default]));
-    return { ...defaults, ...selectedProfile?.overrides, ...advancedOverrides };
+    const resolved = { ...defaults, ...selectedProfile?.overrides, ...advancedOverrides };
+    if (["Adam", "AdamW"].includes(String(resolved.optimizer)) && !Object.hasOwn(advancedOverrides, "warmup_bias_lr")) resolved.warmup_bias_lr = 0;
+    return resolved;
   }, [advancedOverrides, catalog.advanced_config_schema, selectedProfile]);
   const validationErrors = form.mode === "advanced" ? validateAdvanced(catalog, resolvedAdvanced, form.epochs, acceptance) : [];
   const updateProfile = (profile: TrainingJobCreate["profile"]) => {
@@ -115,9 +119,10 @@ export function TrainingJobDialog({ catalog, initialRequest, pending, error, onC
     </div>
     {form.mode === "advanced" ? <div className="training-advanced">
       <fieldset><legend>训练预设</legend><label>训练预设<select aria-label="训练预设" value={form.profile} onChange={(event) => updateProfile(event.target.value as TrainingJobCreate["profile"])}>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.label} — {profile.description}</option>)}</select></label><p>{selectedProfile?.description}</p></fieldset>
-      {catalog.advanced_config_schema?.groups.map((group) => <fieldset key={group.id}><legend>{group.label}</legend><div className="training-advanced-grid">{group.fields.map((name) => { const descriptor = catalog.advanced_config_schema?.fields[name]; return descriptor ? <AdvancedField key={name} descriptor={descriptor} value={resolvedAdvanced[name] ?? ""} onChange={(value) => setAdvancedOverrides({ ...advancedOverrides, [name]: value })} /> : null; })}</div></fieldset>)}
+      {catalog.advanced_config_schema?.groups.map((group) => <fieldset key={group.id}><legend>{group.label}</legend><div className="training-advanced-grid">{group.fields.map((name) => { const descriptor = catalog.advanced_config_schema?.fields[name]; return descriptor ? <AdvancedField key={name} descriptor={descriptor} disabled={resolvedAdvanced.optimizer === "auto" && ["lr0", "momentum", "warmup_bias_lr"].includes(name)} value={resolvedAdvanced[name] ?? ""} onChange={(value) => setAdvancedOverrides({ ...advancedOverrides, [name]: value })} /> : null; })}</div></fieldset>)}
+      {resolvedAdvanced.optimizer === "auto" ? <p className="training-form__status">自动优化器会决定实际学习率、动量和偏置预热值；初始化后可在任务详情查看。</p> : null}
       <AcceptanceFields catalog={catalog} datasetClasses={selectedDataset?.classes ?? []} templateId={form.acceptance_template ?? ""} value={acceptance} onTemplate={updateTemplate} onChange={setAcceptance} />
-      <details className="training-config-summary"><summary>最终配置摘要</summary><dl><div><dt>预设</dt><dd>{selectedProfile?.label}</dd></div><div><dt>Schema</dt><dd>v{catalog.config_schema_version ?? 1}</dd></div><div><dt>自定义参数</dt><dd>{Object.keys(advancedOverrides).length} 项</dd></div><div><dt>类别门槛</dt><dd>{Object.keys(acceptance.classes).length} 类</dd></div>{Object.entries(resolvedAdvanced).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{String(value)}</dd></div>)}</dl></details>
+      <details className="training-config-summary"><summary>请求配置摘要</summary><dl><div><dt>预设</dt><dd>{selectedProfile?.label}</dd></div><div><dt>Schema</dt><dd>v{catalog.config_schema_version ?? 1}</dd></div><div><dt>自定义参数</dt><dd>{Object.keys(advancedOverrides).length} 项</dd></div><div><dt>类别门槛</dt><dd>{Object.keys(acceptance.classes).length} 类</dd></div>{Object.entries(resolvedAdvanced).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{String(value)}</dd></div>)}</dl></details>
     </div> : null}
     {form.imgsz === 960 || ["l", "x"].includes(size) ? <p className="training-warning">此组合更重，显存占用、训练和部署时间会明显增加，提交前需要确认。</p> : null}
     {resolvedAdvanced.cache === "ram" && form.mode === "advanced" ? <p className="training-warning">RAM 缓存可能占用大量系统内存，提交前需要确认。</p> : null}

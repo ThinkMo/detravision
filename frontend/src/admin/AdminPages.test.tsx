@@ -15,10 +15,10 @@ import { AuditPage } from "./audit/AuditPage";
 
 const json = (value: unknown, status = 200) => Response.json(value, { status });
 
-function renderPage(page: ReactNode, brand = false) {
+function renderPage(page: ReactNode, brand = false, entry = "/") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const content = <QueryClientProvider client={client}>{page}</QueryClientProvider>;
-  return render(<MemoryRouter>{brand ? <QueryClientProvider client={client}><BrandProvider>{page}</BrandProvider></QueryClientProvider> : content}</MemoryRouter>);
+  return render(<MemoryRouter initialEntries={[entry]}>{brand ? <QueryClientProvider client={client}><BrandProvider>{page}</BrandProvider></QueryClientProvider> : content}</MemoryRouter>);
 }
 
 afterEach(() => {
@@ -84,7 +84,7 @@ it("shows model version and runtime before activation", async () => {
     throw new Error(`Unexpected request ${path}`);
   }));
 
-  renderPage(<ModelsPage />);
+  renderPage(<ModelsPage />, false, "/admin/models?view=models");
   await userEvent.click(await screen.findByRole("button", { name: "激活helmet-v3" }));
   const dialog = screen.getByRole("dialog", { name: "激活模型“helmet-v3”" });
   expect(dialog).toHaveTextContent("onnx-fp32");
@@ -174,7 +174,7 @@ it("announces model activation failure inside the confirmation dialog", async ()
     throw new Error(`Unexpected request ${path}`);
   }));
 
-  renderPage(<ModelsPage />);
+  renderPage(<ModelsPage />, false, "/admin/models?view=models");
   await userEvent.click(await screen.findByRole("button", { name: "激活helmet-v3" }));
   const dialog = screen.getByRole("dialog", { name: "激活模型“helmet-v3”" });
   await userEvent.click(within(dialog).getByRole("button", { name: "确认激活" }));

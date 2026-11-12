@@ -17,6 +17,7 @@ from backend.schemas import (
     DatasetClassRenameRequest,
     DatasetPublishRequest,
     DatasetRescanRequest,
+    DatasetImagesRemoveRequest,
     RevisionRequest,
     TrainingDatasetCreate,
     TrainingDatasetUpdate,
@@ -72,7 +73,7 @@ _SAFE_JOB_FIELDS = (
 )
 _DETAIL_JOB_FIELDS = ("advanced_config", "acceptance_config", "acceptance_checks")
 _PUBLIC_ARTIFACTS = frozenset({
-    "log", "analysis", "confusion_matrix", "results_curve", "pr_curve",
+    "log", "analysis", "effective_config", "validation", "confusion_matrix", "results_curve", "pr_curve",
     "f1_curve", "precision_curve", "recall_curve",
 })
 
@@ -139,6 +140,8 @@ def _public_job(
         result["results_curve_url"] = (
             f"{base}/results_curve" if result.get("has_metrics") else None
         )
+        result["effective_config_url"] = f"{base}/effective_config"
+        result["validation_url"] = f"{base}/validation" if result.get("has_metrics") else None
         result["analysis_url"] = f"{base}/analysis" if result.get("has_metrics") else None
         result["evaluation_curve_urls"] = (
             {
@@ -273,10 +276,11 @@ def _annotation_error(error: Exception) -> JSONResponse:
         "annotation_invalid": 422, "class_invalid": 422,
         "annotation_write_failed": 503,
     }
-    return JSONResponse(
-        status_code=statuses.get(code, 422),
-        content={"code": code, "message": "The dataset annotation request failed."},
-    )
+    content: dict[str, Any] = {"code": code, "message": "The dataset annotation request failed."}
+    report = getattr(error, "report", None)
+    if report is not None:
+        content["validation"] = report.to_json()
+    return JSONResponse(status_code=statuses.get(code, 422), content=content)
 
 
 @router.get("/training/dataset-roots")
@@ -461,6 +465,18 @@ def _annotation_mutation(request, user, action, dataset_id, callback):
     _record(request, user, action, dataset_id, "success", resource="training_dataset")
     return result
 
+
+@router.post("/training/datasets/{dataset_id}/images/remove")
+def remove_training_dataset_images(
+    dataset_id: int, payload: DatasetImagesRemoveRequest, request: Request,
+    user: AuthenticatedUser = Depends(audited_admin("dataset_image_remove", "training_dataset_image")),
+):
+    return _annotation_mutation(
+        request, user, "dataset_image_remove", dataset_id,
+        lambda: _annotation_service(request).remove_images(
+            dataset_id, payload.revision, [item.model_dump() for item in payload.images],
+        ),
+    )
 
 @router.put("/training/datasets/{dataset_id}/images/{image_id}/annotations")
 def save_training_dataset_annotations(
@@ -681,7 +697,7 @@ def get_training_artifact(
         return _error(exc)
     except (OSError, ValueError):
         return JSONResponse(status_code=404, content={"code": "artifact_not_found", "message": "The artifact was not found."})
-    media_type = "application/json" if kind == "analysis" else "image/png"
+    media_type = "application/json" if kind in {"analysis", "effective_config", "validation"} else "image/png"
     return FileResponse(
         path,
         media_type=media_type,

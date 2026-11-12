@@ -7,6 +7,9 @@ import os
 from pathlib import Path
 import secrets
 import hashlib
+import json
+from threading import RLock
+from sqlalchemy.exc import SQLAlchemyError
 from typing import Any, Mapping, Sequence
 
 from .dataset_filesystem import DatasetFilesystem, DatasetFilesystemError
@@ -32,6 +35,7 @@ class AnnotationService:
     def __init__(self, repository: TrainingDatasetRepository, filesystem: DatasetFilesystem) -> None:
         self._repository = repository
         self._filesystem = filesystem
+        self._mutation_lock = RLock()
 
     def get_image(self, dataset_id: int, image_id: int) -> dict[str, Any]:
         dataset, image = self._records(dataset_id, image_id)
@@ -64,19 +68,99 @@ class AnnotationService:
         self, dataset_id: int, image_id: int, revision: int,
         boxes: Sequence[Mapping[str, object]],
     ) -> dict[str, Any]:
-        if not boxes:
-            raise AnnotationServiceError("annotation_invalid")
-        dataset, image = self._records(dataset_id, image_id, editable=True)
-        parsed = [self._box(value, len(dataset["classes"])) for value in boxes]
-        payload = "".join(
-            f"{box.class_id} {box.x_center:.6f} {box.y_center:.6f} {box.width:.6f} {box.height:.6f}\n"
-            for box in parsed
-        ).encode("utf-8")
-        return self._write(dataset, image, revision, payload, "annotated")
+        with self._mutation_lock:
+            if not boxes:
+                raise AnnotationServiceError("annotation_invalid")
+            dataset, image = self._records(dataset_id, image_id, editable=True)
+            parsed = [self._box(value, len(dataset["classes"])) for value in boxes]
+            payload = "".join(
+                f"{box.class_id} {box.x_center:.6f} {box.y_center:.6f} {box.width:.6f} {box.height:.6f}\n"
+                for box in parsed
+            ).encode("utf-8")
+            return self._write(dataset, image, revision, payload, "annotated")
 
     def confirm_empty(self, dataset_id: int, image_id: int, revision: int) -> dict[str, Any]:
-        dataset, image = self._records(dataset_id, image_id, editable=True)
-        return self._write(dataset, image, revision, b"", "confirmed_empty")
+        with self._mutation_lock:
+            dataset, image = self._records(dataset_id, image_id, editable=True)
+            return self._write(dataset, image, revision, b"", "confirmed_empty")
+
+    def remove_images(
+        self, dataset_id: int, revision: int, images: Sequence[Mapping[str, object]],
+    ) -> dict[str, Any]:
+        with self._mutation_lock:
+            return self._remove_images(dataset_id, revision, images)
+
+    def _remove_images(self, dataset_id, revision, images):
+        if (type(revision) is not int or revision < 0 or not 1 <= len(images) <= 100
+            or any(set(item) != {"id", "revision"} or type(item["id"]) is not int
+                   or item["id"] <= 0 or type(item["revision"]) is not int
+                   or item["revision"] < 0 for item in images)
+            or len({item["id"] for item in images}) != len(images)):
+            raise AnnotationServiceError("annotation_invalid")
+        dataset = self._dataset(dataset_id, editable=True)
+        records = []
+        for item in images:
+            image = self._repository.get_image(dataset_id, item["id"])
+            if image is None:
+                raise AnnotationServiceError("annotation_not_found")
+            if image["revision"] != item["revision"]:
+                raise AnnotationServiceError("annotation_conflict")
+            records.append(image)
+        directory = self._filesystem.dataset_path(dataset)
+        archive = directory / ".removed-images" / secrets.token_hex(12)
+        paths = []
+        try:
+            # No caller-supplied paths; reject symlinks/junctions or any dataset escape.
+            for candidate in (archive.parent, archive):
+                if candidate.resolve() != candidate.absolute() or not candidate.resolve().is_relative_to(directory):
+                    raise AnnotationServiceError("annotation_invalid")
+            for image in records:
+                for kind, resolver in (("image", self._filesystem.resolve_image), ("label", self._filesystem.resolve_label)):
+                    source = resolver(dataset, image["split"], image["image_key"])
+                    split_parts = list(Path(str(dataset[f"{image['split']}_split"])).parts)
+                    key = Path(str(image["image_key"]))
+                    if kind == "label":
+                        split_parts[split_parts.index("images")] = "labels"
+                        key = key.with_suffix(".txt")
+                    expected = directory.joinpath(*split_parts) / key
+                    if source != expected.absolute():
+                        raise AnnotationServiceError("annotation_invalid")
+                    if source.resolve() != source.absolute() or not source.resolve().is_relative_to(directory):
+                        raise AnnotationServiceError("annotation_invalid")
+                    if source.exists() and not source.is_file():
+                        raise AnnotationServiceError("annotation_invalid")
+                    if kind == "image" and source.exists():
+                        digest = hashlib.sha256()
+                        with source.open("rb") as stream:
+                            while block := stream.read(1024 * 1024):
+                                digest.update(block)
+                        if digest.hexdigest() != image["content_digest"]:
+                            raise AnnotationServiceError("annotation_conflict")
+                    paths.append((source, archive / source.relative_to(directory)))
+        except DatasetFilesystemError as exc:
+            raise AnnotationServiceError("annotation_invalid") from exc
+        except OSError as exc:
+            raise AnnotationServiceError("annotation_write_failed") from exc
+        moved = []
+        try:
+            with self._repository.removing_images(dataset_id, revision, images) as new_revision:
+                archive.mkdir(parents=True)
+                (archive / "manifest.json").write_text(json.dumps({
+                    "dataset_id": dataset_id, "previous_revision": revision,
+                    "dataset_revision": new_revision, "images": records,
+                }, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+                for source, target in paths:
+                    if source.exists():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(source, target)
+                        moved.append((source, target))
+            return {"removed": len(images), "image_ids": [item["id"] for item in images],
+                    "dataset_revision": new_revision}
+        except (OSError, SQLAlchemyError, TrainingDatasetConflictError) as exc:
+            for source, target in reversed(moved):
+                os.replace(target, source)
+            code = "annotation_conflict" if isinstance(exc, TrainingDatasetConflictError) else "annotation_write_failed"
+            raise AnnotationServiceError(code) from exc
 
     def add_class(self, dataset_id: int, revision: int, name: str) -> dict[str, Any]:
         dataset = self._dataset(dataset_id, editable=True)

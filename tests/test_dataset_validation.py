@@ -75,6 +75,8 @@ def test_pending_image_blocks_publication(validation_context):
     with pytest.raises(DatasetValidationError) as raised:
         validator.publish(editing["id"], editing["revision"], False)
     assert raised.value.code == "dataset_validation_failed"
+    assert raised.value.report is not None
+    assert raised.value.report.to_json()["errors"][0]["code"] == "annotation_pending"
 
 
 def test_confirmed_empty_requires_warning_confirmation_then_publishes(validation_context):

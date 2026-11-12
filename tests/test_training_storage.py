@@ -53,6 +53,7 @@ def test_artifact_resolution_uses_only_the_fixed_allowlist(tmp_path: Path):
         "precision_curve": "P_curve.png",
         "recall_curve": "R_curve.png",
         "effective_config": "effective_config.json",
+        "validation": "validation.json",
     }
     assert storage.resolve_artifact(run_key, "best") == (
         storage.root / run_key / "weights" / "best.pt"

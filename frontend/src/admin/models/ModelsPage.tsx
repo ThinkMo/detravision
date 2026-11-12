@@ -38,7 +38,7 @@ export function ModelsPage() {
   const client = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const view = searchParams.get("view");
-  const tab = view === "datasets" || view === "training" ? view : "models";
+  const tab = view === "models" || view === "training" ? view : "datasets";
   const setTab = (next: "models" | "datasets" | "training") => setSearchParams((previous) => {
     const updated = new URLSearchParams(previous);
     updated.set("view", next);

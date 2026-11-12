@@ -7,6 +7,8 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from training.contracts import extract_metrics
+from training.configuration import BASE_DEFAULTS, resolve_training_config
+from training.runtime import RuntimeRecorder
 
 
 DEFAULT_DATA = "training/configs/construction-ppe-helmet.yaml"
@@ -22,8 +24,20 @@ def cache_value(value: str) -> bool | str:
     raise argparse.ArgumentTypeError("cache must be false, ram, or disk")
 
 
+def batch_value(value: str) -> int:
+    if value == "auto":
+        return -1
+    try:
+        result = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("batch must be auto or a positive integer") from exc
+    if result < 1:
+        raise argparse.ArgumentTypeError("batch must be auto or a positive integer")
+    return result
+
+
 def add_device_options(parser: argparse.ArgumentParser, *, include_cache: bool) -> None:
-    parser.add_argument("--device", default="auto", help="auto, cpu, 0, 0,1, etc.")
+    parser.add_argument("--device", default=BASE_DEFAULTS["device"], help="auto, cpu, 0, 0,1, etc.")
     parser.add_argument("--workers", type=int, default=0, help="data-loading worker count")
     if include_cache:
         parser.add_argument("--cache", type=cache_value, default=False, help="false, ram, or disk")
@@ -37,13 +51,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     train = subparsers.add_parser("train", help="start a new training run")
     train.add_argument("--data", default=DEFAULT_DATA, help="dataset YAML path")
-    train.add_argument("--model", default="yolo11n.pt", help="model checkpoint or YAML")
-    train.add_argument("--epochs", type=int, default=50, help="training epoch count")
-    train.add_argument("--imgsz", type=int, default=512, help="square input image size")
-    train.add_argument("--batch", type=int, default=4, help="images per batch")
+    train.add_argument("--model", default=BASE_DEFAULTS["base_model"], help="model checkpoint or YAML")
+    train.add_argument("--epochs", type=int, default=BASE_DEFAULTS["epochs"], help="training epoch count")
+    train.add_argument("--imgsz", type=int, default=BASE_DEFAULTS["imgsz"], help="square input image size")
+    train.add_argument("--batch", type=batch_value, default=BASE_DEFAULTS["batch"], help="auto or images per batch")
     train.add_argument("--project", default="runs/detect", help="base output directory")
     train.add_argument("--name", help="optional run directory name")
-    train.add_argument("--patience", type=int, default=100, help="early-stopping patience")
+    train.add_argument("--patience", type=int, default=BASE_DEFAULTS["patience"], help="early-stopping patience")
     train.add_argument("--seed", type=int, default=0, help="random seed")
     add_device_options(train, include_cache=True)
 
@@ -56,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("checkpoint", help="checkpoint to evaluate")
     validate.add_argument("--data", default=DEFAULT_DATA, help="dataset YAML path")
     validate.add_argument("--split", choices=("val", "test"), default="val", help="dataset split to evaluate")
-    validate.add_argument("--imgsz", type=int, default=512, help="square input image size")
+    validate.add_argument("--imgsz", type=int, default=BASE_DEFAULTS["imgsz"], help="square input image size")
     validate.add_argument("--batch", type=int, default=4, help="images per batch")
     add_device_options(validate, include_cache=False)
     return parser
@@ -155,10 +169,29 @@ def execute(
         yolo_cls = YOLO
 
     device = resolve_device(args.device, cuda_available)
-    if args.command == "train":
-        return yolo_cls(args.model).train(**train_kwargs(args, device))
-    if args.command == "resume":
-        return yolo_cls(args.checkpoint).train(**resume_kwargs(args, device))
+    if args.command in {"train", "resume"}:
+        model = yolo_cls(args.model if args.command == "train" else args.checkpoint)
+        if args.command == "train":
+            kwargs = train_kwargs(args, device)
+            advanced = resolve_training_config(
+                mode="basic", profile="balanced", epochs=args.epochs,
+                overrides={"workers": args.workers, "seed": args.seed,
+                           "cache": "false" if args.cache is False else args.cache},
+            )
+            requested = {
+                "config_schema_version": 1,
+                "base": {"base_model": Path(args.model).name, "epochs": args.epochs,
+                         "imgsz": args.imgsz, "batch": "auto" if args.batch == -1 else str(args.batch),
+                         "device": args.device, "patience": args.patience},
+                "advanced_config": advanced,
+            }
+        else:
+            kwargs = resume_kwargs(args, device)
+            requested = {"config_schema_version": 1, "base": {"resume": True},
+                         "advanced_config": None}
+        recorder = RuntimeRecorder(None, requested)
+        recorder.attach(model)
+        return model.train(**kwargs)
     metrics = yolo_cls(args.checkpoint).val(**validate_kwargs(args, device))
     print(format_validation_metrics(metrics))
     return metrics
